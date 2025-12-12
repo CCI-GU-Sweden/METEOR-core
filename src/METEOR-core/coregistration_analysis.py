@@ -1,0 +1,225 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jun 13 14:43:25 2025
+
+@author: simon
+
+metadata needed:
+- 'Physical pixel size X' (µm)
+- 'Image Size C' (number of channels)
+- Image Size Z
+"""
+
+#general import
+from typing import Dict, Any
+import numpy as np
+import os
+
+#analysis import
+import matplotlib.pyplot as plt
+from skimage import filters, measure, transform, morphology
+
+#local import
+import logger
+from functions import (reader, sort_grid, norm_img, img_best_rotation,
+                       crop_with_border, get_centroid,
+                       lattice_fitting, dimension_slicer)
+
+def get_coregistration(img, pxl_size_xy, spacing=4.9, grid_size=21):
+    blue = img[0]
+    red = img[1]
+    #median filter first
+    blue = filters.median(blue, footprint=morphology.disk(1))
+    red = filters.median(red, footprint=morphology.disk(1))
+    #normalize the image
+    blue = norm_img(blue)
+    red = norm_img(red)
+    #rotate
+    final_angle = img_best_rotation(blue)
+    blue = transform.rotate(blue, final_angle, preserve_range=True)
+    red = transform.rotate(red, final_angle, preserve_range=True)
+    #crop the image
+    top, bottom = crop_with_border(blue, pxl_size_xy=pxl_size_xy)
+    blue_c = blue[top[0]:bottom[0], top[1]:bottom[1]]
+    red_c = red[top[0]:bottom[0], top[1]:bottom[1]]
+    
+    #get blue points
+    blue_points = get_centroid(blue_c, grid_size*grid_size)
+    blue_points = lattice_fitting(blue_points, grid_size, spacing, pxl_size_xy,
+                                  return_rawlattice=True, image_shape=blue_c.shape)
+    
+    #get red points
+    red_points = get_centroid(red_c, grid_size*grid_size)
+    red_points = lattice_fitting(red_points, grid_size, spacing, pxl_size_xy,
+                                 return_rawlattice=True, image_shape=red_c.shape)
+    
+    return {'max_amplitude':np.max(np.linalg.norm(blue_points - red_points, axis=1)),
+            'red_c':red_c,
+            'blue_c':blue_c,
+            'blue_points':blue_points,
+            'red_points':red_points
+            }
+
+def coregistration_analysis(img_array, grid_size, spacing, metadata, visu:bool=True, debug:bool=False, dim="CZYX") -> Dict[str, Any]:
+    """
+    Compute lateral co-registration accuracy between two channels via a 2d rings target.
+    Requires at least two channels.
+    Parameters
+    ----------
+    img_array : np.ndarray
+        Image array with at least two channels and multiple Z planes, shape CZYX.
+    grid_size : int
+        Number of points in the grid (e.g., 21 for a 21x21 grid).
+    spacing : float
+        Spacing between points in microns.
+    metadata : Dict[str, Any]
+        Metadata dictionary containing at least 'Physical pixel size X' (µm),
+        'Image Size C' (number of channels) and 'Image Size Z' (number of Z planes)
+    visu : bool, optional
+        Whether to generate a visualization figure. The default is True.
+    debug : bool, optional
+        Whether to enable debug logging. The default is False.
+    Returns
+    -------
+    Dict[str, Any]
+        A dictionary containing the analysis results, including the figure (if visu=True),
+        status, measurements, and extra measurements.
+    """
+
+    pxl_size_xy = float(metadata.get('Physical pixel size X', 1.0))
+
+    if int(metadata.get('Image Size T', 0)) > 1: #security, in case of multi-T, select the first one
+        img_array = img_array[:1,...]
+        if debug:
+            logger.info("Plane uniformity: multi-T image, taking T=0 only, new shape: "+str(img_array.shape))
+
+    if int(metadata.get('Image Size C', 0)) < 2:
+        raise Exception(f"Bad shape, image need at least 2 colors, detected {int(metadata.get('Image Size C', 0))}")    
+
+    if int(metadata.get('Image Size Z', 0)) < 2:
+        raise Exception(f"Bad shape, image need be of multiple Z, detected {int(metadata.get('Image Size Z', 0))}")  
+
+    img_array = dimension_slicer(img_array, metadata, dim)  
+
+    results_coregistration = []
+    for plane in range(img_array.shape[1]):
+        try:
+            result = get_coregistration(img_array[:,plane], pxl_size_xy, 
+                                        spacing=spacing, grid_size=grid_size)
+        except Exception:
+            result = None        
+        results_coregistration.append(result)
+    if debug:
+        logger.debug(f"Plane uniformity: {str([x['max_amplitude'] if x is not None else 'INF' for x in results_coregistration])}")
+
+    best_results_coregistration = results_coregistration[np.argmin([x['max_amplitude'] if x is not None else np.inf for x in results_coregistration])]
+    if best_results_coregistration is None:
+        logger.error("Coregistration analysis failed on all planes.")
+        return {
+            "figure": None,
+            "figure name": 'Coregistration',
+            "status": "error",
+            "measurements": [
+                {'category': 'Coregistration', 'name': 'Pearson', 'value': None, 'unit': ''},
+                {'category': 'Coregistration', 'name': 'Amplitude', 'value': None, 'unit': 'µm'},],
+            "extra_measurements": {},
+        }
+    
+    red_c = best_results_coregistration['red_c']
+    blue_c = best_results_coregistration['blue_c']
+    red_points = best_results_coregistration['red_points']
+    blue_points = best_results_coregistration['blue_points']
+    deformation_vectors = blue_points - red_points
+    _, sort_indices = sort_grid(blue_points)
+    del results_coregistration
+    
+    # Compute magnitude and direction
+    magnitude = np.linalg.norm(deformation_vectors, axis=1)  # Shape (grid_size*grid_size,)
+    max_vector_amplitude = np.max(magnitude)
+    #Pearson
+    pearson_coeff, _ = measure.pearson_corr_coeff(red_c, blue_c)
+
+    #make the figure
+    fig = None
+    if visu:
+        X = blue_points[:, 0][sort_indices].reshape(grid_size, grid_size)
+        Y = blue_points[:, 1][sort_indices].reshape(grid_size, grid_size)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5))
+        
+        ax1.imshow(np.stack([red_c, blue_c, np.zeros(red_c.shape), ], axis=-1),
+                   origin='lower')
+        # ax1.legend()
+        ax1.set_title("Centered image and points detection")
+        ax1.axis('off')
+        
+        final_image = magnitude[sort_indices].reshape(grid_size,grid_size)
+        level = 3
+        CS = ax2.contour(blue_points[:,1].reshape(grid_size,grid_size),
+                         blue_points[:,0].reshape(grid_size,grid_size),
+                         filters.gaussian(final_image, 0.8),
+                         levels=level, linewidths=range(level), colors='black',
+                         )
+        ax2.clabel(CS, fontsize=10)
+        
+        im = ax2.imshow(final_image, extent=[X.min(), X.max(), Y.min(), Y.max()], 
+                        cmap='jet', alpha=0.7, vmin=0, vmax=10, origin='lower')
+        
+        #prepare for the vector visualization
+        dx = (X.max() - X.min()) / (grid_size - 1)  # 21 points, 20 intervals
+        dy = (Y.max() - Y.min()) / (grid_size - 1)
+        X_grid = np.linspace(X.min() + dx/2, X.max() - dx/2, grid_size)
+        Y_grid = np.linspace(Y.min() + dy/2, Y.max() - dy/2, grid_size)
+        X_centered, Y_centered = np.meshgrid(X_grid, Y_grid)
+        
+        ax2.quiver(X_centered, Y_centered,
+                   deformation_vectors[:, 0][sort_indices].reshape(grid_size, grid_size),
+                   deformation_vectors[:, 1][sort_indices].reshape(grid_size, grid_size),
+                   color='black', angles="xy", scale_units="xy", scale=0.1,
+                   pivot='middle',
+                   minlength=1)
+        
+        ax2.set_title("Lateral co-registration accuracy")
+        ax2.axis("off")
+        plt.colorbar(im, label="Co-registration Magnitude (pixel)")
+        
+        fig.subplots_adjust(bottom=0.1, left=0.05, right=0.95)  # Ensure enough space for both plots and the text
+        # Add statistics text at the bottom
+        stats_text = (
+            f"Pearson coefficient: {pearson_coeff:.4f} - "
+            f"Maximum Vector Amplitude: {max_vector_amplitude:.2f} pxl - "
+            f"Maximum Vector Amplitude: {max_vector_amplitude*pxl_size_xy:.2f} microns"
+        )
+        
+        # Adding the statistics as text
+        fig.text(0.5, 0.08, stats_text, ha='center', va='top', fontsize=10, color='white', bbox=dict(facecolor='black', alpha=0.5))
+        
+        plt.tight_layout()
+        if __name__ == '__main__':
+            plt.show()
+    
+    valid = (pearson_coeff is not None) and np.isfinite(max_vector_amplitude)
+    return {
+        "figure": fig if visu else None,
+        "figure name": 'Coregistration',
+        "status": "success" if valid else "error",
+        "measurements": [
+            {'category': 'Coregistration', 'name': 'Pearson', 'value': pearson_coeff, 'unit': ''},
+            {'category': 'Coregistration', 'name': 'Amplitude', 'value': max_vector_amplitude*pxl_size_xy, 'unit': 'µm'},
+        ],
+        "extra_measurements": {
+            "pearson_coeff": pearson_coeff,
+            "max_vector_amplitude_pxl": max_vector_amplitude,
+        },
+    }
+
+
+if __name__ == '__main__': #for testing and debugging
+    logger.setup_logger()
+    import pprint
+    path = r"upload"
+    filename = '60x - 2D rings.czi'
+    #filename = '40x - 2D rings.czi'
+    #filename = 'Argo 63x Oil 2d rings.czi'
+    img_array, metadata = reader(path+os.sep+filename)
+    result = coregistration_analysis(img_array, 21, 5.1, metadata, debug=True)
+    pprint.pprint(result)
