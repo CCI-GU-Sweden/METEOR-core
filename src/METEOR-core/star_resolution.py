@@ -13,7 +13,7 @@ metadata is a dictionnary that required the following entries:
 """
 
 from typing import Tuple, Dict, Any
-from venv import logger
+import logger
 
 import numpy as np
 import matplotlib.pyplot as plt

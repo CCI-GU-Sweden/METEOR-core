@@ -1,0 +1,96 @@
+[project]
+name = "METEOR-core"
+dynamic = ["version"]
+description = "Core computational engine for METEOR: microscope metrology, calibration, and performance evaluation."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Simon Leclerc", email = "simon.leclerc@gu.se" },
+]
+
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering",
+]
+
+requires-python = ">=3.8,<3.13"
+
+dependencies = [
+    "numpy>=1.20",
+    "scikit-image>=0.20",
+    "scipy>=1.6",
+    "matplotlib>=3.3",
+    "pandas>=1.3",
+    "scikit-learn>=0.24",
+    "pylibCZIrw"  # optional, but safe to include
+]
+
+[project.urls]
+"Documentation" = "https://github.com/CCI-GU-Sweden/METEOR-core#README.md"
+"Source Code" = "https://github.com/CCI-GU-Sweden/METEOR-core"
+
+[build-system]
+requires = ["setuptools>=61", "setuptools_scm[toml]>=7"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests"]
+
+[tool.setuptools.package-data]
+"METEOR_core" = ["*.yaml", "*.json"]
+
+[tool.setuptools_scm]
+write_to = "src/METEOR_core/_version.py"
+fallback_version = "0.0.1.dev0"
+
+[tool.black]
+line-length = 88
+target-version = ["py38", "py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 88
+lint.select = ["E", "F", "W", "UP", "I", "BLE", "B", "A", "C4", "ISC", "G", "PIE", "SIM"]
+lint.ignore = [
+    "E501",
+    "UP006",
+    "UP007",
+]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".mypy_cache",
+    ".pants.d",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "*vendored*",
+    "*_vendor*",
+]
+fix = true
