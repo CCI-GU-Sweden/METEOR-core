@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Mon Jun 16 09:54:15 2025
 
@@ -21,8 +20,7 @@ from scipy import ndimage
 #local import
 from . import logger
 from .functions import dimension_slicer, reader, norm_img, list_multiply, round_to_even
-#import conf
-#plt.rcParams['font.family'] = conf.MATPLOTLIB_FONT
+
 
 def log_scale(image): #log the image
     return np.log1p(image*500)
@@ -366,7 +364,7 @@ def process_bead(centroid:tuple, img:np.ndarray, labeled_img:np.ndarray,
 
         return psf
     
-    except Exception as e:
+    except (ValueError, IndexError, TypeError) as e:
         logger.debug(f"[process_bead]: exception for centroid {centroid}: {e}")
         return None
 
@@ -423,7 +421,7 @@ def bead_extraction(img:np.array, labeled_img:np.array,
         'X': round_to_even(large_crop_microns['X'] / physical_pixel_sizes['X']),
         'Y': round_to_even(large_crop_microns['Y'] / physical_pixel_sizes['Y']),
         'Z': round_to_even(large_crop_microns['Z'] / physical_pixel_sizes['Z'])
-    }   
+    }
     
     centroids = [bead.centroid for bead in filtered_beads]
 
@@ -508,9 +506,9 @@ def return_error() -> dict:
         },
         "gif": None,
         "tiff": None,
-    }    
+    }
 
-def psf_analysis(img_array: np.ndarray, bead_size:float, metadata:dict, ignore_edge:bool=False,
+def psf_analysis(img_array: np.ndarray, metadata:dict, bead_size:float=0.3, ignore_edge:bool=False,
                  debug:bool=False, visu:bool=False, dim='ZYX') -> dict:
     """
     PSF analysis from sub-resolution beads.
@@ -557,7 +555,7 @@ def psf_analysis(img_array: np.ndarray, bead_size:float, metadata:dict, ignore_e
         }
     """
 
-    img_array = dimension_slicer(img_array, metadata, dim)  
+    img_array = dimension_slicer(img_array, metadata, dim)
     if int(metadata.get('Image Size C', 0)) > 1: #security, in case of multi-C, select the first one
         img_array = img_array[:,:1,...]
 

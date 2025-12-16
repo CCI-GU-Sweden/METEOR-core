@@ -68,16 +68,16 @@ def metrology_splitter(img, name, metadata):
     try:
         if category == 'Argo_2D_Rings_Analysis':
             results = []
-            results.append(coregistration_analysis(img, 21, 5.1, metadata))
-            results.append(distortion_analysis(img, 21, 5.1, metadata))
-            results.append(uniformity_analysis(img, 21, metadata))
+            results.append(coregistration_analysis(img, metadata))
+            results.append(distortion_analysis(img, metadata))
+            results.append(uniformity_analysis(img, metadata))
             results.append(RSF_analysis(img, metadata))
             return results
         elif category == 'Argo_Intensity_Linearity':
             result = intensity_analysis(img, metadata)
             return [result]
         elif category == 'Psf_Measure': #TODO take care of the gif and ome as well - in img_function.py!
-            result = psf_analysis(img, .3, metadata, verbose=True)
+            result = psf_analysis(img, metadata)
             return [result]
         elif category == 'Plastic_Field_Uniformity':
             result = calculate_field_uniformity(img, metadata)

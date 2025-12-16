@@ -87,21 +87,61 @@ cd METEOR-core
 pip install -e .
 ```
 
+## Parameters
+
+### Inputs
+
+All of the core functions of METEOR_core takes as input:
+
+- An image as numpy array
+- A metadata dictionary. Entries of this dictionnary MUST contains:
+
+    - 'Physical pixel size X': the size of the pixel in microns. If not defined, assume 1.
+    - 'Physical pixel size Z': the size of the Z step in case of Zstack. If not defined, assume 1.
+    - 'Image Size C': number of channel - for multi-color analysis only
+    - 'Image Size Z': number of z slice - for Zstack analysis only
+    - 'Image Size T': number of timepoint - for timelapse analysis only
+    - 'axis_order': order of the axis as string, like: TCZYX. Should match the image dimension
+    - 'Lens NA': numerical apperture of the lens (only for )
+
+Other parameters are prefilled. Please consult the documentation of each function.
+
+### Outputs
+
+Each main function will return a dictionnary with the following entries:
+
+- 'figure': contain a matplotlib.figure that can be saved with fig.savefig. None if failed.
+- 'figure name': name and directory of the image to save. Same name than the image
+- 'status': if the measurement was a success, failure or error
+- 'measurements: A list of dictionnary containing the most important measure:
+    - 'category' - the type of measure (e.g. 'PSF', 'RSF'...)
+    - 'name' - the name of the measure itself (e.g 'FWHM XY', 'PSF X'...)
+    - 'value' - the value of the measure itself. A number (float)
+    - 'unit' - the unit of the measure (e.g. 'µm', 'degree', '' for no unit)
+- 'extra_measurements': a dictionnary containing extra number. No units, pure number, and no much context.
+- for PSF only: 'gif' - array to be able to generate the PSF beads evolution
+- for PSF only: 'tiff' - array (ZXY) containing the calculated PSF
+
+If using the `metrology_splitter` in the `metrology` module, the function will return a list of results dictionnary instead.
+
+Up to you to plug this output in your pipeline (database saving, Omero key-value pair...).
+
 ## 🧪 Usage Example
 
 ```python
-from METEOR_core import reader, star_resolution_analysis
-img, metadata = reader("40x_star.czi")
+import METEOR_core
 
-res = star_resolution_analysis(img, metadata)
+img, metadata = METEOR_core.functions.reader("upload/40x_star.czi")
+
+res = METEOR_core.star_resolution.star_resolution_analysis(img, metadata)
 print(res["measurements"])
-res["figure"].savefig("star_resolution.jpg")
 ```
 
 A full pipeline classification system is available via:
 
 ```python
-from METEOR_core.metrology import reader, metrology_splitter
+from METEOR_core.metrology import metrology_splitter
+from METEOR_core.functions import reader
 img, metadata = reader("image_name.czi")
 results = metrology_splitter(img, "image_name.czi", metadata)
 ```
@@ -113,7 +153,7 @@ When publishing results obtained using METEOR-core, please cite:
 METEOR-core: A Unified Metrology Engine for Automated Assessment of Microscope Performance
 (2025) — GitHub: https://github.com/CCI-GU-Sweden/METEOR-core
 
-A DOI will be added once the project is archived on Zenodo.
+A DOI will be added once the project is archived on Zenodo or published.
 
 ## 🤝 Contributing
 

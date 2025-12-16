@@ -102,7 +102,7 @@ def return_error() -> Dict[str, Any]:
             "measurements": [{"category": "Uniformity - Argolight","name": "Uniformity","value": None,"unit": "",}],
             }
 
-def uniformity_analysis(img_array, grid_size, metadata, visu:bool=True, debug:bool=False, dim='ZYX') -> Dict[str, Any]:
+def uniformity_analysis(img_array:np.ndarray, metadata:dict, grid_size:int=21, visu:bool=True, debug:bool=False, dim='ZYX') -> Dict[str, Any]:
     """
     Compute the field uniformity via a 2d rings target.
     Parameters

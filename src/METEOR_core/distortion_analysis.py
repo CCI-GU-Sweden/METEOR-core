@@ -56,7 +56,7 @@ def get_distortion(img, pxl_size_xy, spacing=4.9, grid_size=21):
             }
     
     
-def distortion_analysis(img_array, grid_size, spacing, metadata, visu:bool=True, debug:bool=False, dim='ZYX') -> Dict[str, Any]:
+def distortion_analysis(img_array, metadata:dict, grid_size:int=21, spacing:float=5.1,  visu:bool=True, debug:bool=False, dim='ZYX') -> Dict[str, Any]:
     """
     Compute the field distortion via a 2d rings target.
     Parameters

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Fri Jun 13 14:43:25 2025
 
@@ -60,7 +59,7 @@ def get_coregistration(img, pxl_size_xy, spacing=4.9, grid_size=21):
             'red_points':red_points
             }
 
-def coregistration_analysis(img_array, grid_size, spacing, metadata, visu:bool=True, debug:bool=False, dim="CZYX") -> Dict[str, Any]:
+def coregistration_analysis(img_array, metadata, grid_size:int=21, spacing:float=5.1,  visu:bool=True, debug:bool=False, dim="CZYX") -> Dict[str, Any]:
     """
     Compute lateral co-registration accuracy between two channels via a 2d rings target.
     Requires at least two channels.
@@ -94,20 +93,20 @@ def coregistration_analysis(img_array, grid_size, spacing, metadata, visu:bool=T
             logger.info("Plane uniformity: multi-T image, taking T=0 only, new shape: "+str(img_array.shape))
 
     if int(metadata.get('Image Size C', 0)) < 2:
-        raise Exception(f"Bad shape, image need at least 2 colors, detected {int(metadata.get('Image Size C', 0))}")    
+        raise Exception(f"Bad shape, image need at least 2 colors, detected {int(metadata.get('Image Size C', 0))}")
 
     if int(metadata.get('Image Size Z', 0)) < 2:
-        raise Exception(f"Bad shape, image need be of multiple Z, detected {int(metadata.get('Image Size Z', 0))}")  
+        raise Exception(f"Bad shape, image need be of multiple Z, detected {int(metadata.get('Image Size Z', 0))}")
 
-    img_array = dimension_slicer(img_array, metadata, dim)  
+    img_array = dimension_slicer(img_array, metadata, dim)
 
     results_coregistration = []
     for plane in range(img_array.shape[1]):
         try:
             result = get_coregistration(img_array[:,plane], pxl_size_xy, 
                                         spacing=spacing, grid_size=grid_size)
-        except Exception:
-            result = None        
+        except (ValueError, IndexError):
+            result = None
         results_coregistration.append(result)
     if debug:
         logger.debug(f"Plane uniformity: {str([x['max_amplitude'] if x is not None else 'INF' for x in results_coregistration])}")
