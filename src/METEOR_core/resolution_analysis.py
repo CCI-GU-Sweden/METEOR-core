@@ -18,11 +18,9 @@ from scipy import signal, optimize, stats
 from skimage import transform, filters, morphology
 
 #local import
-import database as db
-import logger
-from functions import img_best_rotation, reader
-import conf
-plt.rcParams['font.family'] = conf.MATPLOTLIB_FONT
+from . import logger
+from .functions import img_best_rotation, reader
+
 
 
 def detect_orientation(img, verbose=False):

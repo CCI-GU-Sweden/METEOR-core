@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Mon Aug 25 10:15:54 2025
 
@@ -18,9 +17,9 @@ from skimage import transform, measure
 from sklearn.metrics import r2_score
 from sklearn.linear_model import LinearRegression
 
-from functions import (dimension_slicer, reader, norm_center_img_3D,
+from .functions import (dimension_slicer, reader, norm_center_img_3D,
                        img_best_rotation, rings_detection, aggregate_close_points)
-import logger
+from . import logger
 
 CORNER_TOL_UM = 2
 ROW_BAND_UM = 2

@@ -20,8 +20,8 @@ import matplotlib.pyplot as plt
 from skimage import filters, transform
 
 #local import
-import logger
-from functions import (reader, sort_grid, norm_img, img_best_rotation,
+from . import logger
+from .functions import (reader, sort_grid, norm_img, img_best_rotation,
                        crop_with_border, get_centroid, lattice_fitting,
                        dimension_slicer)
 

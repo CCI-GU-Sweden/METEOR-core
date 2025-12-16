@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Fri Jun 13 13:53:16 2025
 
@@ -24,8 +23,8 @@ from skimage import filters, transform
 from skimage.draw import line
 
 #local import
-import logger
-from functions import (reader, sort_grid, norm_img, img_best_rotation, uniformity,
+from . import logger
+from .functions import (reader, sort_grid, norm_img, img_best_rotation, uniformity,
                        crop_with_border, get_centroid, lattice_fitting,
                        centuring_acc, dimension_slicer)
 

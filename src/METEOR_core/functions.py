@@ -16,7 +16,7 @@ from scipy import ndimage, optimize, spatial
 from skimage import filters, measure, morphology, transform
 
 #local import
-import logger
+from . import logger
 
 VALID_AXES = set("TCZYX")
 

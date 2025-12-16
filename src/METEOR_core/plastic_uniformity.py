@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Mon Jun 16 12:19:45 2025
 
@@ -18,8 +17,8 @@ from skimage import transform, filters
 from skimage.draw import line
 
 #local import
-import logger
-from functions import dimension_slicer, reader, uniformity, centuring_acc
+from . import logger
+from .functions import dimension_slicer, reader, uniformity, centuring_acc
 
 
 def ensure_square(img):
@@ -121,7 +120,7 @@ def calculate_field_uniformity(img_stack:np.ndarray, metadata:dict, img0=None,
         logger.debug(f"[calculate_field_uniformity]: using {len(img_stack_list)} images.")
 
     image = process_img(img_stack_list, guassian_blur)
-    
+
     # Optional background subtraction
     if img0 is not None:
         img0 = np.asarray(img0)
@@ -134,7 +133,7 @@ def calculate_field_uniformity(img_stack:np.ndarray, metadata:dict, img0=None,
 
         bg = process_img(img0_list, guassian_blur, grid_size)
         image = np.clip(image - bg, 0, None)
-        
+
     # Bin to coarse grid
     final_image = bin_image(image, grid_size)
 
@@ -154,7 +153,7 @@ def calculate_field_uniformity(img_stack:np.ndarray, metadata:dict, img0=None,
     max_coord = np.unravel_index(np.argmax(final_image), final_image.shape)
     rr, cc = line(min_coord[0], min_coord[1], max_coord[0], max_coord[1])
     line_profile = final_image[rr, cc]
-    
+
     roll_off_dia = np.max(diagonal) - np.min(diagonal)
     roll_off_adi = np.max(anti_dia) - np.min(anti_dia) 
 
@@ -170,16 +169,16 @@ def calculate_field_uniformity(img_stack:np.ndarray, metadata:dict, img0=None,
         centroid = (np.nan, np.nan)
 
     centering_accuracy = centuring_acc(final_image)
-    
+
     #visualization
     fig = None
     if visu:
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
-        
+
         ax1.imshow(image.T, origin='lower')
         ax1.set_title("Reference image")
         ax1.axis('off')
-        
+
         level = 4
         # Create pixel coordinate meshgrid
         x_coords, y_coords = np.meshgrid(np.arange(grid_size), np.arange(grid_size))
@@ -194,17 +193,17 @@ def calculate_field_uniformity(img_stack:np.ndarray, metadata:dict, img0=None,
                          levels=level, linewidths=range(level), colors='black',
                          )
         ax2.clabel(CS, fontsize=10)
-        
+
         im = ax2.imshow(final_image.T, extent=[X.min(), X.max(), Y.min(), Y.max()], 
                         cmap='jet_r', alpha=0.7, vmin=0, vmax=np.max(final_image), origin='lower')
-        
+
         ax2.plot(centroid[0],centroid[1],'r+', markersize=10, zorder=100)
         ax2.plot(geo_center[0],geo_center[1],'k+', markersize=10)
-        
+
         ax2.set_title("Field Uniformity")
         ax2.axis("off")
         plt.colorbar(im, label="Intensity (%)")
-        
+
         # Compute the real-world distances for the x-axis
         bin_size_x = (img_stack[0].shape[1] * pxl_size_xy) / grid_size
         diagonal_distance = np.arange(len(diagonal)) * bin_size_x
@@ -217,9 +216,8 @@ def calculate_field_uniformity(img_stack:np.ndarray, metadata:dict, img0=None,
         ax3.legend()
         ax3.set_ylim([0, np.max(final_image)])
         ax3.set_title("Line intensity profiles")
-        
         fig.subplots_adjust(bottom=0.1, left=0.05, right=0.95)  # Ensure enough space for both plots and the text
-        
+
         # Add statistics text at the bottom
         stats_text = (
             f"Roll off Diagonal: {roll_off_dia:.2f}% - "
@@ -227,10 +225,10 @@ def calculate_field_uniformity(img_stack:np.ndarray, metadata:dict, img0=None,
             f"Centering Accuracy: {centering_accuracy:.2f}% - "
             f"Field Uniformity: {field_uniformity:.2f}%"
         )
-        
+
         # Adding the statistics as text
         fig.text(0.5, 0.08, stats_text, ha='center', va='top', fontsize=10, color='white', bbox=dict(facecolor='black', alpha=0.5))
-                            
+
         if __name__ == '__main__':
             plt.show()
 

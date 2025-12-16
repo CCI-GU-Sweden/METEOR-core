@@ -19,8 +19,8 @@ from skimage import morphology, filters, measure, transform
 from scipy import ndimage
 
 #local import
-import logger
-from functions import dimension_slicer, reader, norm_img, list_multiply, round_to_even
+from . import logger
+from .functions import dimension_slicer, reader, norm_img, list_multiply, round_to_even
 #import conf
 #plt.rcParams['font.family'] = conf.MATPLOTLIB_FONT
 

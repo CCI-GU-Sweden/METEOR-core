@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Fri Jun 13 10:48:12 2025
 
@@ -21,11 +20,9 @@ from sklearn.cluster import KMeans
 from scipy.spatial import KDTree
 
 #local import
-import database as db
-import logger
-from functions import reader, sort_grid, norm_center_img_3D
-import conf
-plt.rcParams['font.family'] = conf.MATPLOTLIB_FONT
+from . import logger
+from .functions import reader, sort_grid, norm_center_img_3D
+
 
 
 def analyze_z_resolution(img_array, pxl_size_xy, pxl_size_z):

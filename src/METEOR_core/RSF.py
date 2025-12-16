@@ -27,8 +27,8 @@ from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 
 #local import
-import logger
-from functions import (dimension_slicer, reader, norm_img, img_best_rotation,
+from . import logger
+from .functions import (dimension_slicer, reader, norm_img, img_best_rotation,
                        crop_with_border, rings_detection, aggregate_close_points)
 
 RING_DIAMETER = 0.6  #microns

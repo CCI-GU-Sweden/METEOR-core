@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 star_resolution.py
 
@@ -13,15 +12,14 @@ metadata is a dictionnary that required the following entries:
 """
 
 from typing import Tuple, Dict, Any
-import logger
 
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 from skimage import filters, morphology 
 
-from functions import dimension_slicer, reader, norm_img
-
+from .functions import dimension_slicer, reader, norm_img
+from . import logger
 
 def _res_key(r):
     val = r["extra_measurements"]["resolution_length_um"]

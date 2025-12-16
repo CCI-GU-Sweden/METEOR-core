@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Tue Aug 26 08:49:58 2025
 
@@ -30,9 +29,9 @@ from scipy import ndimage
 import re
 
 #local import
-from functions import reader, norm_img, rings_detection, dimension_slicer, aggregate_close_points
-from stack_accurancy import remove_corners
-import logger
+from .functions import reader, norm_img, rings_detection, dimension_slicer, aggregate_close_points
+from .stack_accurancy import remove_corners
+from . import logger
 
 #global parameters
 CORNER_TOL_UM = 2

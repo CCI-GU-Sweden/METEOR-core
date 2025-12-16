@@ -25,8 +25,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
 #local import
-import logger
-from functions import dimension_slicer, norm_img, get_label, reader, lattice_fitting
+from . import logger
+from .functions import dimension_slicer, norm_img, get_label, reader, lattice_fitting
 
 
 def get_r2(sorted_intensities:List[float]) -> Tuple[np.ndarray, float]:
