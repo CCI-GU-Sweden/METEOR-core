@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Wed Jun 11 10:08:33 2025
 
@@ -11,7 +10,6 @@ Reused functions for the metrology part
 
 import numpy as np
 from dateutil import parser
-
 from scipy import ndimage, optimize, spatial
 from skimage import filters, measure, morphology, transform
 
@@ -41,15 +39,15 @@ def tr_pxl_type(pixeltypes):
         return np.uint8
     else:
         return np.uint16
-    
-    
-def norm_img(img:np.array):
+
+
+def norm_img(img:np.ndarray):
     #normalize the image 0-1,security by transforming as float before
     img = img.astype(float)
     return (img - np.min(img))/(np.max(img) - np.min(img))
 
 
-def zscore_norm(arr:np.array):
+def zscore_norm(arr:np.ndarray):
     return (arr - np.mean(arr))/np.std(arr)
 
 
@@ -65,32 +63,32 @@ def focus_score_laplacian(img_2d: np.ndarray) -> float:
 def get_info_metadata_from_czi(img_path:str, verbose:bool=False) -> dict:
     """
     Extract important metadata from a CZI image file.
-    
+
     This function opens a CZI image file, reads its metadata, and extracts
     specific information such as microscope details, lens properties,
     image type, pixel size, image dimensions, and other relevant metadata.
-    
+
     Args:
         img_path : The file path to the CZI image.
         verbose (bool, optional): If True, print detailed information during processing. Defaults to True.
-    
+
     Returns:
         ImageMetadata: A dictionnary containing the extracted metadata.
-    
+
     Raises:
         FileNotFoundError: If the specified image file does not exist.
         ValueError: If the file is not a valid CZI image or if metadata extraction fails.
     """
-    
+
     try:
         from pylibCZIrw import czi as pyczi
         with pyczi.open_czi(img_path) as czidoc:
             metadata = czidoc.metadata['ImageDocument']['Metadata']
-    except FileNotFoundError:
-        raise FileNotFoundError("The file does not exist.")
+    except FileNotFoundError as e:
+        raise FileNotFoundError("The file does not exist.") from e
     except Exception as e:
-        raise ValueError(f"Error opening or reading metadata: {str(e)}")
-           
+        raise ValueError(f"Error opening or reading metadata: {str(e)}") from e
+
     #Initialization
     app_name = None
     app_version = None
@@ -102,14 +100,14 @@ def get_info_metadata_from_czi(img_path:str, verbose:bool=False) -> dict:
     comment = None
     description = None
     creation_date = None
-                             
+
     #grab the correct version of the metadata
     app = metadata['Information'].get('Application', None)
     if app is not None: #security check
         app_name = app['Name']
         app_version = app['Version']
         if verbose:
-            logger.info('Metadata made with %s version %s' %(app_name, app_version))
+            logger.info(f'Metadata made with {app_name} version {app_version}')
         #microscope name, based on the version of the metadata. Do NOT get ELYRA microscope
         #Another way will be to grab the IP address of the room and map it
         if 'ZEN' in app['Name'] and 'blue' in app['Name'] and app['Version'].startswith("3."): #CD7, 980
@@ -118,32 +116,31 @@ def get_info_metadata_from_czi(img_path:str, verbose:bool=False) -> dict:
             #hardcoded part :(
             if 'Axiocam 705 mono' in microscope:
                 microscope = microscope.replace('Axiocam 705 mono', 'LSM 980')
-                
+
         elif 'ZEN' in app['Name'] and 'blue' in app['Name'] and app['Version'].startswith("2."): #Observer
             microscope = metadata['Information']['Instrument']['Microscopes']['Microscope'].get('@Name', None)
-            
+
         elif 'AIM' in app['Name']: #ELYRA, 700, 880
             microscope = metadata['Information']['Instrument']['Microscopes']['Microscope'].get('System', None)
             #hardcoded part :(
             if 'Andor1' in microscope:
                 microscope = microscope.replace('Andor1', 'Elyra')
-            
+
         if verbose:
-            logger.info('Image made on %s' %(microscope))
+            logger.info(f'Image made on {microscope}')
         #pixel size (everything in the scaling)
         physical_pixel_sizes = {}
         for dim in metadata['Scaling']['Items']['Distance']:
             physical_pixel_sizes[dim['@Id']] = round(float(dim['Value'])*1e+6, 4)
-            
-        
+
         #image dimension
         dims = metadata['Information']['Image']
         size = {}
-        for d in dims.keys():
+        for d in dims:
             if 'Size' in d: #just the different Size (X,Y,Z,C,M,H...)
                 size[d] = int(dims[d])
         if verbose:
-            logger.info('Image with dimension %s and pixel size of %s' %(size, physical_pixel_sizes))
+            logger.info(f'Image with dimension {size} and pixel size of {physical_pixel_sizes}')
 
         # Acquisition type (not fully correct with elyra)
         acq_type = metadata['Information']['Image']['Dimensions']['Channels']['Channel']
@@ -154,8 +151,8 @@ def get_info_metadata_from_czi(img_path:str, verbose:bool=False) -> dict:
         elif isinstance(acq_type, dict):
             acq_type = acq_type.get('AcquisitionMode', None)
         if verbose:
-            logger.info('Image acquired with a %s mode' %(acq_type))
-            
+            logger.info(f'Image acquired with a {acq_type} mode')
+
         #lens info
         lensNA = metadata['Information']['Instrument']['Objectives']['Objective'].get('LensNA', None)
         if lensNA is not None:
@@ -164,21 +161,21 @@ def get_info_metadata_from_czi(img_path:str, verbose:bool=False) -> dict:
         if lensMag is not None:
             lensMag = int(lensMag)
         if verbose:
-            logger.info('Objective lens used has a magnification of %s and a NA of %s' %(lensMag, lensNA))
-            
+            logger.info(f'Objective lens used has a magnification of {lensMag} and a NA of {lensNA}')
+
         #processing (if any)
         processing = metadata['Information'].get('Processing', None)
         if processing is not None:
             pre_processed = list(processing.keys())
         if verbose:
-            logger.info('Image preprocessed with %s' %(pre_processed))
-            
+            logger.info(f'Image preprocessed with {pre_processed}')
+
         #other
         comment = metadata['Information']['Document'].get('Comment', None)
         description = metadata['Information']['Document'].get('Description', None)
         creation_date = metadata['Information']['Document'].get('CreationDate', None)
         creation_date = parser.parse(creation_date).strftime("%Y-%m-%d")
-    
+
     mini_metadata = {'Microscope':microscope,
                      'Lens Magnification': lensMag,
                      'Lens NA': lensNA,
@@ -188,38 +185,33 @@ def get_info_metadata_from_czi(img_path:str, verbose:bool=False) -> dict:
                      'Acquisition date':creation_date,
                      'Dimension':size,
                      }
-    
+
     #add the pixel size
     [mini_metadata.update({f'Physical pixel size {x}': physical_pixel_sizes[x]}) for x in physical_pixel_sizes]
     # canonical: 'Image Size X', 'Image Size Y', 'Image Size Z', 'Image Size C', 'Image Size T', 'Image Size S'
     for ax in ("X", "Y", "Z", "C", "T", "S"):
         dim_key = f"Size{ax}"  # e.g. 'SizeC'
-        if dim_key in size:
-            val = int(size[dim_key])
-        else:
-            # T and S (and sometimes Z) might be missing; default to 1
-            # X/Y should basically always be present for valid images.
-            val = 1
+        # T and S (and sometimes Z) might be missing; default to 1
+        # X/Y should basically always be present for valid images.
+        val = int(size[dim_key]) if dim_key in size else 1
         mini_metadata[f"Image Size {ax}"] = val
-    
-    return mini_metadata       
+
+    return mini_metadata
 
 
 def reader(filepath:str):
     file_support = ['czi']
-    
     file_format = filepath.split('.')[-1]
-    
-    if file_format not in file_support:       
+
+    if file_format not in file_support:
         raise ValueError(f"Unsupported file format: {file_format}. Supported formats: {str(file_support)}")
-    
+
     if filepath.endswith('.czi'):
         img, metadata = czi_reader_tzcxy(filepath)
-        
 
     return img, metadata
 
-def czi_reader_tzcxy(filepath:str) -> tuple[np.array, dict]:
+def czi_reader_tzcxy(filepath:str) -> tuple[np.ndarray, dict]:
     #read the image data and metadata
     metadata = get_info_metadata_from_czi(filepath)
     metadata['filepath'] = filepath
@@ -234,36 +226,69 @@ def czi_reader_tzcxy(filepath:str) -> tuple[np.array, dict]:
     try:
         from pylibCZIrw import czi as pyczi
         with pyczi.open_czi(filepath) as czidoc:
-            
             pixeltypes = tr_pxl_type(czidoc.pixel_types)
+
+            # Check if this is a mosaic/tiled image
+            total_bbox = czidoc.total_bounding_box
+            s_info = total_bbox.get('S', []) if total_bbox else []
+            is_mosaic = size_s > 1 or (len(s_info) > 1 and s_info[1] > 1)
             
+            logger.info(f"Reading CZI: S={size_s}, mosaic={is_mosaic}, bbox={total_bbox}")
+
             img_array = np.zeros(
                 (size_s, size_t, size_c, size_z, size_y, size_x),
                 dtype=pixeltypes,
             )
 
-            # read the data
             for s in range(size_s):
                 for t in range(size_t):
                     for z in range(size_z):
                         for c in range(size_c):
-                            if size_s > 1:
-                                img = czidoc.read(plane={'T':t, 'C':c, 'Z':z}, scene=s)
-                            else:
-                                img = czidoc.read(plane={'T':t, 'C':c, 'Z':z})
-                            img_array[s,t,c,z] = np.squeeze(img)
+                            try:
+                                if is_mosaic:
+                                    # Use read_mosaic for stitched multi-tile images
+                                    result = czidoc.read_mosaic(plane={'T':t, 'C':c, 'Z':z}, scene=s, scale_factor=1)
+                                    # Handle different return types
+                                    if isinstance(result, tuple):
+                                        img = result[0]
+                                    else:
+                                        img = result
+                                else:
+                                    # Use regular read for single-tile images
+                                    if size_s > 1:
+                                        img = czidoc.read(plane={'T':t, 'C':c, 'Z':z}, scene=s)
+                                    else:
+                                        img = czidoc.read(plane={'T':t, 'C':c, 'Z':z})
+
+                                img_squeezed = np.squeeze(img)
+
+                                # Handle shape mismatch (shouldn't happen with read_mosaic, but safety)
+                                if img_squeezed.shape != (size_y, size_x):
+                                    h, w = img_squeezed.shape
+                                    crop_h = min(h, size_y)
+                                    crop_w = min(w, size_x)
+                                    logger.warning(f"Shape mismatch at S{s}T{t}C{c}Z{z}: expected ({size_y},{size_x}), got ({h},{w}). Cropping.")
+                                    img_array[s,t,c,z, :crop_h, :crop_w] = img_squeezed[:crop_h, :crop_w]
+                                else:
+                                    img_array[s,t,c,z] = img_squeezed
+                                    
+                            except Exception as e:
+                                logger.error(f"Error reading plane S{s}T{t}C{c}Z{z}: {str(e)}")
+                                raise
+
     except FileNotFoundError:
         raise FileNotFoundError("The file does not exist.")
     except Exception as e:
+        logger.error(f"Full error details: {type(e).__name__}: {str(e)}")
         raise ValueError(f"Error opening or reading the file: {str(e)}")    
 
-    logger.info('Opening image %s' %(filepath))
-    
+    logger.info(f'Opening image {filepath}')
+
     if metadata.get('Image Size S', 1) == 1:
         img_array = img_array[0]
         metadata['axis_order'] = 'TCZYX'
     else:
-        metadata['axis_order'] = 'STCZYX'   
+        metadata['axis_order'] = 'STCZYX'
 
     return img_array, metadata
 
@@ -369,8 +394,7 @@ def dimension_slicer(img: np.ndarray, metadata: dict, dimension: str) -> np.ndar
 
     return sliced
 
-def get_label(img:np.array, closing_iteration:int=4):
-    
+def get_label(img:np.ndarray, closing_iteration:int=4):
     thresh = filters.threshold_otsu(img)
     binary = img > thresh
     binary = ndimage.binary_closing(binary, iterations=closing_iteration) #security, close the cross!
@@ -379,7 +403,7 @@ def get_label(img:np.array, closing_iteration:int=4):
     return measure.label(binary)
 
 
-def generate_lattice(params:np.array, grid_size:int):
+def generate_lattice(params:np.ndarray, grid_size:int):
     """
     Generates a square lattice based on the given parameters.
 
@@ -418,12 +442,12 @@ def generate_lattice(params:np.array, grid_size:int):
     return translated_lattice
 
 
-def lattice_cost_penalized(params:np.array,
-                           points:np.array,
+def lattice_cost_penalized(params:np.ndarray,
+                           points:np.ndarray,
                            grid_size:int,
                            keep_percentage:float=0.9,
                            anchor_point=None,
-                           expected_spacing_px:float=None,
+                           expected_spacing_px=None,
                            image_shape=None):
     """
     Cost function to fit a square lattice to points using KDTree for nearest neighbor search.
@@ -522,7 +546,7 @@ def lattice_cost_penalized(params:np.array,
     return float(cost)
 
 
-def sort_grid(points:np.array, gridsize:int=21):
+def sort_grid(points:np.ndarray, gridsize:int=21):
     """
     Sorts a (gridsizexgridsize) distorted grid of 2D points into row-major order.
 
@@ -555,11 +579,10 @@ def sort_grid(points:np.array, gridsize:int=21):
 
 def lattice_fitting(points, grid_size, spacing, pxl_size_xy:float,
                     return_rawlattice:bool=False, return_points:bool=False,
-                    max_rms_fraction: float = 0.5, image_shape:tuple=None,
+                    max_rms_fraction: float = 0.5, image_shape=None,
                     detection_percentage:float=0.90):
-    
+
     spacing_micron = spacing
-    
     expected_spacing_px = spacing_micron / pxl_size_xy
     center_point = points.mean(axis=0)
     # Initial guess for parameters: [cx, cy, angle, spacing]
@@ -569,41 +592,23 @@ def lattice_fitting(points, grid_size, spacing, pxl_size_xy:float,
         0.0,                    # Angle
         expected_spacing_px   # Spacing
     ]
-    
+
     # Optimize the lattice parameters
     result = optimize.minimize(lattice_cost_penalized, initial_params,
                                args=(points, grid_size, detection_percentage, center_point, 
                                      expected_spacing_px, image_shape),
                                      method='Powell')
     translated_lattice = generate_lattice(result.x, grid_size)      # Generate the lattice points 
-    
+
     if return_rawlattice:
         return translated_lattice
-    
+
     # return translated_lattice
     points_sorted, _ = sort_grid(points, gridsize=grid_size)
     tree = spatial.KDTree(translated_lattice)
     dists, idx = tree.query(points_sorted)
     paired_lattice = translated_lattice[idx]
 
-    
-    #print(f"{float(np.sqrt(np.mean(dists**2))):.2f} px RMS error for lattice fitting.")
-    """
-    # sanity check: RMS residual must be reasonably small
-    if max_rms_fraction is not None:
-        rms = float(np.sqrt(np.mean(dists**2)))
-        spacing_px = float(result.x[3])
-        spacing_for_threshold = spacing_px if spacing_px > 0 else expected_spacing_px
-        max_rms_allowed = max_rms_fraction * spacing_for_threshold
-
-        if spacing_for_threshold > 0 and rms > 10 * spacing_for_threshold:
-            # insane fit, bail out
-            logger.warning(
-                f"[lattice_fitting] RMS={rms:.2f} px, spacing={spacing_for_threshold:.2f} px "
-                f"=> rejecting lattice (likely units mismatch or bad detection)."
-            )
-            return None if not return_points else (None, None)
-    """
     if return_points:
         return paired_lattice, points_sorted
     else:
@@ -611,12 +616,11 @@ def lattice_fitting(points, grid_size, spacing, pxl_size_xy:float,
 
 
 def norm_center_img_3D(img, edge=3):
-    #Detect ROI   
+    #Detect ROI
     thresh = filters.threshold_otsu(img)
     # thresh = filters.threshold_yen(img)
     binary = img > thresh
     binary = morphology.opening(binary)
-    
     # Find the bounding box of the ROI
     y = np.any(binary, axis=(0,1))
     x = np.any(binary, axis=(0,2))
@@ -624,7 +628,6 @@ def norm_center_img_3D(img, edge=3):
     zmin, zmax = np.where(z)[0][[0, -1]]
     xmin, xmax = np.where(x)[0][[0, -1]]
     ymin, ymax = np.where(y)[0][[0, -1]]
-    
     # Add a small edge, taking care of the image dimension as well!
     zmin = max(0, zmin-edge)
     zmax = min(zmax+edge, img.shape[0])
@@ -635,7 +638,6 @@ def norm_center_img_3D(img, edge=3):
     # Crop the image to the ROI
     img_roi = img[zmin:zmax+1, xmin:xmax+1, ymin:ymax+1]
     img_roi = img_roi.astype(np.float32) #required
-    
     #substract and clip the background value from the img_roi
     img_array = img.astype(np.float32)
     img_array[zmin:zmax+1, xmin:xmax+1, ymin:ymax+1] = np.nan
@@ -643,11 +645,11 @@ def norm_center_img_3D(img, edge=3):
 
     if not np.isnan(bck):
         img_roi = np.clip(img_roi - bck, 0, None)
-              
+
     return norm_img(img_roi)
 
 
-def img_best_rotation(img:np.array):
+def img_best_rotation(img:np.ndarray):
     """
     rotate an image so that the top and bottom are aligned to the matrix.
     Assume a square like structure
@@ -674,17 +676,17 @@ def img_best_rotation(img:np.array):
     while True:
         # Find the coordinates of non-zero pixels
         coords = np.column_stack(np.where(binary))
-    
+
         # Find extreme points
         top_left = coords[np.argmin(coords.sum(axis=1))]
         bottom_right = coords[np.argmax(coords.sum(axis=1))]
         top_right = coords[np.argmax(coords[:, 1] - coords[:, 0])]
         bottom_left = coords[np.argmin(coords[:, 1] - coords[:, 0])]
-        
+
         #calculate the angle to rotate
         angle1 = np.degrees(np.arctan2(top_right[0] - top_left[0], top_right[1] - top_left[1]))
         angle2 = np.degrees(np.arctan2(bottom_right[0] - bottom_left[0], bottom_right[1] - bottom_left[1]))
-        
+
         angle = np.sum((angle1, angle2))/2
         final_angle += angle
         #rotate
@@ -697,7 +699,7 @@ def img_best_rotation(img:np.array):
             break
         i += 1
         prev_angle = angle
-        
+
     return final_angle
 
 
@@ -706,10 +708,9 @@ def get_label_centroid(label_img) -> list:
     for region in measure.regionprops(label_img):
         y, x = region.centroid
         centers.append((x, y))
-    
     return centers
 
-def get_centroid(img, nb_points:int, min_size:int=20, tolerance: float = 0.05,) -> np.array:
+def get_centroid(img, nb_points:int, min_size:int=20, tolerance: float = 0.05,):
     """
     Detect blob centroids in an image.
 
@@ -742,7 +743,7 @@ def get_centroid(img, nb_points:int, min_size:int=20, tolerance: float = 0.05,) 
             continue
         y, x = region.centroid
         centers.append((x, y))
-    
+
     centers = np.asarray(centers, dtype=float)
     n_detected = centers.shape[0]
 
@@ -780,7 +781,7 @@ def get_centroid(img, nb_points:int, min_size:int=20, tolerance: float = 0.05,) 
     return np.asarray(centers)
 
 
-def crop_with_border(img, edge_border:int=4, pxl_size_xy:bool=None):
+def crop_with_border(img, edge_border:int=4, pxl_size_xy=None):
     """
     Crop an image to the selection defined by the binary, and remove some borders as well.
     Border is defined as pixel if pxl_size_xy is None, otherwise, the pixel_size_xy should be a float indicate the pixel size
@@ -821,10 +822,10 @@ def crop_with_border(img, edge_border:int=4, pxl_size_xy:bool=None):
     return top_left, bottom_right
 
 
-def uniformity(img_array:np.array) -> float:
+def uniformity(img_array:np.ndarray) -> float:
     return 100 * np.min(img_array) / np.max(img_array)
 
-def centuring_acc(img_array:np.array) -> float:
+def centuring_acc(img_array:np.ndarray) -> float:
     """
     Calculate the centering accurancy of an image. Max is 100.
     The formula is from https://pmc.ncbi.nlm.nih.gov/articles/PMC9526251/
@@ -850,18 +851,20 @@ def centuring_acc(img_array:np.array) -> float:
 
     return centering
 
-def rings_detection(img_array:np.array, metadata:dict) -> np.array:
+def rings_detection(img_array:np.ndarray, metadata:dict) -> np.ndarray:
+    if img_array is None:
+        raise ValueError("img_array cannot be None")
     footprint_radius = 3 if int(metadata.get('Lens Magnification', 0)) > 40 else 1
     binary = img_array > filters.threshold_otsu(img_array)
     binary = ndimage.binary_fill_holes(binary)
-    
-    if binary.ndim == 3 and metadata.get("Image Size Z", 0) > 1: #check at least 3D and Zstack!
+
+    if binary.ndim == 3 and metadata.get("Image Size Z", 0) > 1: # type: ignore #check at least 3D and Zstack!
         binary = morphology.binary_closing(binary, footprint=morphology.ball(footprint_radius))
         # binary = morphology.binary_opening(binary, footprint=morphology.ball(footprint_radius))
     else:
         binary = morphology.binary_closing(binary, footprint=morphology.disk(footprint_radius))
         # binary = morphology.binary_opening(binary, footprint=morphology.disk(footprint_radius))
-    
+
     return binary
 
 
