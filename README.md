@@ -3,21 +3,15 @@
 Metrology Engine for Optical Robustness — Core Algorithms
 
 METEOR-core is the analysis engine of the METEOR ecosystem:  
-a unified framework for **microscope performance evaluation**, including:
-
-- **PSF analysis** (sub-resolution beads)
-- **Star-pattern resolution (FFT)**
-- **2D-rings distortion**
-- **Co-registration accuracy**
-- **Field uniformity (Argolight patterns)**
-- **Intensity linearity**
-- **Stage drift & Z-stack accuracy**
-- **General Argolight metrology**
+a unified framework for **microscope performance evaluation**.
 
 This package contains **only the computational algorithms** (the “core”).  
 Visualization, scoring dashboards, and acquisition automation are handled by:
 
-- **METEOR-view** (web visualization & scoring — Flask) *(in development)*
+- **METEOR-view** (web visualization & scoring — Flask) *([Github](https://github.com/CCI-GU-Sweden/METEOR-view))*
+
+Acquisition by: 
+
 - **METEOR-smart** (smart microscopy & automated acquisition workflows) *(upcoming)*
 
 ---
@@ -47,21 +41,19 @@ The package is designed to integrate seamlessly into:
 ### 🔬 Optical Quality Metrics
 
 - PSF (X/Y/Z FWHM) from bead stacks  
-- Ring Spread Function (RSF)  
-- FFT-based radial star-pattern resolution  
-- Objective performance scoring
+- Ring Spread Function (Argolight 2d rings pattern)  
+- FFT-based radial resolution  (Argolight star-pattern)  
 
 ### 🧩 Geometric Accuracy
 
-- Distortion mapping from Argolight 2D rings  
-- Co-registration accuracy across channels  
-- Lattice fitting with robust optimization
+- Distortion mapping from Argolight 2D rings (Argolight 2d rings pattern)   
+- Co-registration accuracy across channels (Argolight 2d rings pattern)   
 
 ### 🌈 Illumination & Detector Metrics
 
-- Field uniformity  
-- Centering accuracy  
-- Intensity linearity (Argolight 4×4 patterns)
+- Field uniformity (Argolight 2d rings pattern and plastic slide)  
+- Centering accuracy (Argolight 2d rings pattern and plastic slide)  
+- Intensity linearity (Argolight 4×4 pattern)
 
 ### 🏃 Stability & Drift
 
@@ -72,7 +64,6 @@ The package is designed to integrate seamlessly into:
 ### 🗂 File Format Support
 
 - Native **CZI** reading  
-- Native **OMERO** integration  
 - Dimension-aware slicing (`TCZYX` handling)  
 
 ---
@@ -94,15 +85,15 @@ pip install -e .
 All of the core functions of METEOR_core takes as input:
 
 - An image as numpy array
-- A metadata dictionary. Entries of this dictionnary MUST contains:
+- A metadata dictionary. Entries of this dictionnary should contains:
 
     - 'Physical pixel size X': the size of the pixel in microns. If not defined, assume 1.
     - 'Physical pixel size Z': the size of the Z step in case of Zstack. If not defined, assume 1.
-    - 'Image Size C': number of channel - for multi-color analysis only
-    - 'Image Size Z': number of z slice - for Zstack analysis only
-    - 'Image Size T': number of timepoint - for timelapse analysis only
-    - 'axis_order': order of the axis as string, like: TCZYX. Should match the image dimension
-    - 'Lens NA': numerical apperture of the lens (only for )
+    - 'Image Size C': number of channel - for multi-color analysis only.
+    - 'Image Size Z': number of z slice - for Zstack analysis only.
+    - 'Image Size T': number of timepoint - for timelapse analysis only.
+    - 'axis_order': order of the axis as string, like: TCZYX. Should match the image dimension.
+    - 'Lens NA': numerical apperture of the lens (only for PSF analysis).
 
 Other parameters are prefilled. Please consult the documentation of each function.
 
@@ -145,6 +136,39 @@ from METEOR_core.functions import reader
 img, metadata = reader("image_name.czi")
 results = metrology_splitter(img, "image_name.czi", metadata)
 ```
+
+### Figures example
+
+PSF:
+![PSF.png](assets/PSF-1.png)
+
+RSF:
+![RSF.png](assets/RSF.png)
+
+Star pattern:
+![star_resolution.png](assets/star_resolution.png)
+
+Field distortion
+![distrotion.png](assets/distortion.png)
+
+Image Co-registration
+![registration.png](assets/registration.png)
+
+Field illumination uniformity
+Argolight
+![Argo_uniformity](assets/Argo_uniformity.png)
+
+Plastic
+![plastic_uniformity](assets/plastic_uniformity.png)
+
+Linearity of intensity
+![intensity](assets/intensity.png)
+
+Stage stability
+![stage_stability](assets/stage_stability.png)
+
+Stage Z-calibration accuraccy
+![stack_precision](assets/stack_precision.png)
 
 ## 📣 Citation
 
