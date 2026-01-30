@@ -23,7 +23,7 @@ METEOR (METrology for Evaluation of Optical Resolution)
 
 import traceback
 
-#local import
+# local import
 from . import logger
 from .coregistration_analysis import coregistration_analysis
 from .distortion_analysis import distortion_analysis
@@ -39,18 +39,18 @@ from .uniformity_analysis import uniformity_analysis
 
 def by_name(name):
     name = name.lower()
-    if "ring" in name and '2d' in name:
-        return 'Argo_2D_Rings_Analysis'
-    if 'intensity' in name:
-        return 'Argo_Intensity_Linearity'
-    if 'psf' in name or 'bead' in name:
-        return 'Psf_Measure'
-    if 'plastic' in name or 'platic' in name:
-        return 'Plastic_Field_Uniformity'
-    if 'cross' in name or 'stair' in name:
-        return '3D_Crossing_Stairs'
-    if 'star' in name:
-        return 'star_resolution'
+    if "ring" in name and "2d" in name:
+        return "Argo_2D_Rings_Analysis"
+    if "intensity" in name:
+        return "Argo_Intensity_Linearity"
+    if "psf" in name or "bead" in name:
+        return "Psf_Measure"
+    if "plastic" in name or "platic" in name:
+        return "Plastic_Field_Uniformity"
+    if "cross" in name or "stair" in name:
+        return "3D_Crossing_Stairs"
+    if "star" in name:
+        return "star_resolution"
     return "Unknown"
 
 
@@ -58,7 +58,7 @@ def classify(name, metadata):
     category = by_name(name)
     if category != "Unknown":
         return category
-    #other classifier, like the metadata
+    # other classifier, like the metadata
     return "Unknown"
 
 
@@ -66,32 +66,38 @@ def metrology_splitter(img, name, metadata):
     logger.setup_logger()
     category = classify(name, metadata)
     try:
-        if category == 'Argo_2D_Rings_Analysis':
+        if category == "Argo_2D_Rings_Analysis":
             results = []
             results.append(coregistration_analysis(img, metadata))
             results.append(distortion_analysis(img, metadata))
             results.append(uniformity_analysis(img, metadata))
             results.append(RSF_analysis(img, metadata))
             return results
-        elif category == 'Argo_Intensity_Linearity':
+        elif category == "Argo_Intensity_Linearity":
             result = intensity_analysis(img, metadata)
             return [result]
-        elif category == 'Psf_Measure': #TODO take care of the gif and ome as well - in img_function.py!
+        elif category == "Psf_Measure":
             result = psf_analysis(img, metadata)
             return [result]
-        elif category == 'Plastic_Field_Uniformity':
+        elif category == "Plastic_Field_Uniformity":
             result = calculate_field_uniformity(img, metadata)
             return [result]
-        elif category == '3D_Crossing_Stairs':
+        elif category == "3D_Crossing_Stairs":
             # the Z accuracy
-            if int(metadata.get("Image Size T", 1)) == 1 and int(metadata.get("Image Size Z", 1) )> 1:
+            if (
+                int(metadata.get("Image Size T", 1)) == 1
+                and int(metadata.get("Image Size Z", 1)) > 1
+            ):
                 result = stack_precision(img, metadata)
                 return [result]
             # the stage stability
-            elif int(metadata.get("Image Size T", 1)) > 1 and int(metadata.get("Image Size Z", 1)) == 1:
+            elif (
+                int(metadata.get("Image Size T", 1)) > 1
+                and int(metadata.get("Image Size Z", 1)) == 1
+            ):
                 result = measure_stage_stability(img, metadata)
                 return [result]
-        elif category == 'star_resolution':
+        elif category == "star_resolution":
             results = star_resolution_analysis(img, metadata)
             return [results]
         else:
@@ -101,4 +107,3 @@ def metrology_splitter(img, name, metadata):
         logger.warning(f"Failed to process the image: {name} - {str(e)}")
         logger.warning(f"{traceback.format_exc()}")
         return False
-

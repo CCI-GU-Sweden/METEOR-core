@@ -1,39 +1,38 @@
-import logging #info, warning, error and critical
+import logging  # info, warning, error and critical
 import sys
 
 
 class CustomFormatter(logging.Formatter):
-
-    green ="\x1b[36m" 
+    green = "\x1b[36m"
     grey = "\x1b[38m"
     yellow = "\x1b[33m"
     red = "\x1b[31m"
     bold_red = "\x1b[31m"
     reset = "\x1b[0m"
-    format = '%(process)d: %(asctime)s -%(levelname)s-: %(message)s'
+    format = "%(process)d: %(asctime)s -%(levelname)s-: %(message)s"  # type: ignore
 
     FORMATS = {
-        logging.DEBUG: green + format + reset,
-        logging.INFO: green + format + reset,
-        logging.WARNING: yellow + format + reset,
-        logging.ERROR: red + format + reset,
-        logging.CRITICAL: bold_red + format + reset
+        logging.DEBUG: green + format + reset,  # type: ignore
+        logging.INFO: green + format + reset,  # type: ignore
+        logging.WARNING: yellow + format + reset,  # type: ignore
+        logging.ERROR: red + format + reset,  # type: ignore
+        logging.CRITICAL: bold_red + format + reset,  # type: ignore
     }
 
     def format(self, record):
         log_fmt = self.FORMATS.get(record.levelno)
-        formatter = logging.Formatter(log_fmt,datefmt='%Y%m%d %H:%M:%S')
+        formatter = logging.Formatter(log_fmt, datefmt="%Y%m%d %H:%M:%S")
         return formatter.format(record)
 
 
 def setup_logger(level=logging.DEBUG):
-    log_instance = logging.getLogger('METEOR_core')
+    log_instance = logging.getLogger("METEOR_core")
     # Avoid adding multiple handlers by checking if they already exist
     if not log_instance.hasHandlers():
-        fmtStr = '%(process)d: %(asctime)s -%(levelname)s-: %(message)s'
+        fmtStr = "%(process)d: %(asctime)s -%(levelname)s-: %(message)s"
 
         if level == logging.DEBUG:
-            logging.basicConfig(filename='METEOR_core.log', level=level, format=fmtStr)
+            logging.basicConfig(filename="METEOR_core.log", level=level, format=fmtStr)
             localLogger = logging.StreamHandler(sys.stdout)
             llFmt = CustomFormatter()
             localLogger.setFormatter(llFmt)
@@ -47,16 +46,15 @@ def setup_logger(level=logging.DEBUG):
     logging.getLogger("omero.gateway").setLevel(logging.WARNING)
     logging.getLogger("omero.api.RawPixelsStore").setLevel(logging.WARNING)
     # Flask internal
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     # Matplotlib
-    logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+    logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
 
     str_level = logging.getLevelName(level)
     info(f"Logger set up with level: {str_level}")
 
 
-
-def log(level : str, msg : str):
+def log(level: str, msg: str):
     if level == "info":
         info(msg)
     elif level == "debug" or level == "dbg":
@@ -68,17 +66,22 @@ def log(level : str, msg : str):
     else:
         info(msg)
 
+
 def info(msg: str):
     logger().info(msg)
+
 
 def warning(msg: str):
     logger().warning(msg)
 
+
 def error(msg: str):
     logger().error(msg)
+
 
 def debug(msg: str):
     logger().debug(msg)
 
+
 def logger():
-    return logging.getLogger('METEOR_core')
+    return logging.getLogger("METEOR_core")

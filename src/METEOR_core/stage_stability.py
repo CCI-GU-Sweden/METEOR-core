@@ -1,4 +1,6 @@
 """
+src/METEOR_core/stage_stability.py
+
 Created on Tue Aug 26 08:49:58 2025
 
 @author: simon
@@ -19,23 +21,32 @@ Metadata must contain:
 Warning! If not found, a default step size and physical pixel size of 1 micron is used.
 
 """
-#general import
-import numpy as np
+
+# general import
 import os
-import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection
-from skimage import measure, transform
-from scipy import ndimage
 import re
 
-#local import
-from .functions import reader, norm_img, rings_detection, dimension_slicer, aggregate_close_points
-from .stack_accurancy import remove_corners
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.collections import LineCollection
+from matplotlib.colors import Normalize
+from scipy import ndimage
+from skimage import measure, transform
+
 from . import logger
 
-#global parameters
+# local import
+from .functions import (
+    aggregate_close_points,
+    dimension_slicer,
+    norm_img,
+    rings_detection,
+)
+from .stack_accurancy import remove_corners
+
+# global parameters
 CORNER_TOL_UM = 2
-RING_RADIUS = .6 #in micrometer
+RING_RADIUS = 0.6  # in micrometer
 ROW_BAND_UM = 3
 step = 3.6
 magic_f = 2
@@ -43,7 +54,8 @@ first_row_um = 14.5
 second_row_um = 7.0
 ring_by_stair = 11
 
-def detect_step_from_filename(filename:str):
+
+def detect_step_from_filename(filename: str):
     """
     Detect the step size from the filename.
     """
@@ -74,15 +86,14 @@ def detect_step_from_filename(filename:str):
 
     # Fallback: pick closest if approx typo (like 0.124 instead of 0.125)
     for c in candidates:
-        closest = min(known_steps, key=lambda s: abs(s-c))
+        closest = min(known_steps, key=lambda s: abs(s - c))
         if abs(closest - c) < 0.1:  # tolerance in microns
             return closest
 
     return None  # not found
 
 
-
-def get_rings_data(img:np.array, metadata:dict) -> tuple:
+def get_rings_data(img: np.ndarray, metadata: dict) -> tuple:
     """
     Extract per-ring data from a single 2D frame.
 
@@ -115,11 +126,11 @@ def get_rings_data(img:np.array, metadata:dict) -> tuple:
         or None if detection fails.
     """
     try:
-        pxl_size_xy = float(metadata.get('Physical pixel size X', 1.0))
+        pxl_size_xy = float(metadata.get("Physical pixel size X", 1.0))
     except (TypeError, ValueError):
         logger.error("[get_rings_data] Invalid 'Physical pixel size X' in metadata.")
         return None, None
-    
+
     binary = rings_detection(img, metadata)
     labeled_img = measure.label(binary)
     regions = measure.regionprops(labeled_img, intensity_image=img)
@@ -133,42 +144,49 @@ def get_rings_data(img:np.array, metadata:dict) -> tuple:
 
     centroid_micron = np.copy(centroid)
     centroid_micron *= pxl_size_xy
-    
-    #detect the corners
+
+    # detect the corners
     ymin, xmin = centroid_micron.min(axis=0)
     ymax, xmax = centroid_micron.max(axis=0)
 
-    corner_targets = np.array([
-        [ymin, xmin],  # top-left
-        [ymin, xmax],  # top-right
-        [ymax, xmin],  # bottom-left
-        [ymax, xmax]   # bottom-right
-    ])
-    
+    corner_targets = np.array(
+        [
+            [ymin, xmin],  # top-left
+            [ymin, xmax],  # top-right
+            [ymax, xmin],  # bottom-left
+            [ymax, xmax],  # bottom-right
+        ]
+    )
+
     corner_indices = []
     for ct in corner_targets:
         dists = np.linalg.norm(centroid_micron - ct, axis=1)
         corner_indices.append(np.argmin(dists))
-    
+
     corner_points_micron = centroid_micron[corner_indices]
 
-    #remove the corners
-    centroid_micron_filtered = remove_corners(centroid_micron, corner_points_micron, tol_um=CORNER_TOL_UM)
+    # remove the corners
+    centroid_micron_filtered = remove_corners(
+        centroid_micron, corner_points_micron, tol_um=CORNER_TOL_UM
+    )
 
     if centroid_micron_filtered.size == 0:
         logger.warning("[get_rings_data] All points removed near corners.")
         return None, corner_points_micron
 
     # Detect the stair rings
-    top_y = (corner_points_micron[0,0] + corner_points_micron[1,0]) / 2
-    row1_y = top_y + first_row_um     # first stair row
-    row2_y = row1_y + second_row_um     # second stair row
+    top_y = (corner_points_micron[0, 0] + corner_points_micron[1, 0]) / 2
+    row1_y = top_y + first_row_um  # first stair row
+    row2_y = row1_y + second_row_um  # second stair row
     rows_y = [row1_y, row2_y]
-    
-    centroid_micron_filtered = np.array([
-        coo for coo in centroid_micron_filtered
-        if any(abs(coo[0] - row_y) < ROW_BAND_UM for row_y in rows_y)
-    ])
+
+    centroid_micron_filtered = np.array(
+        [
+            coo
+            for coo in centroid_micron_filtered
+            if any(abs(coo[0] - row_y) < ROW_BAND_UM for row_y in rows_y)
+        ]
+    )
 
     if centroid_micron_filtered.size == 0:
         logger.warning("[get_rings_data] No points near stair rows.")
@@ -187,33 +205,45 @@ def get_rings_data(img:np.array, metadata:dict) -> tuple:
         return None, corner_points_micron
 
     # Horizontal reference (X direction)
-    top_x = (corner_points_micron[0,1] + corner_points_micron[2,1]) / 2  
-    crop_size = int(RING_RADIUS/pxl_size_xy * magic_f)  #radius, in pxl
+    top_x = (corner_points_micron[0, 1] + corner_points_micron[2, 1]) / 2
+    crop_size = int(RING_RADIUS / pxl_size_xy * magic_f)  # radius, in pxl
 
     rings_data = []
     H, W = img.shape
     for centroid in centroid_micron_filtered:
         ring_data = {}
-        if centroid[0] > row1_y-ROW_BAND_UM and centroid[0] < row1_y+ROW_BAND_UM: #stair 1
-            ring_data['stair_idx'] = 0
-        elif centroid[0] > row2_y-ROW_BAND_UM and centroid[0] < row2_y+ROW_BAND_UM: #stair 2
-            ring_data['stair_idx'] = 1
+        if (
+            centroid[0] > row1_y - ROW_BAND_UM and centroid[0] < row1_y + ROW_BAND_UM
+        ):  # stair 1
+            ring_data["stair_idx"] = 0
+        elif (
+            centroid[0] > row2_y - ROW_BAND_UM and centroid[0] < row2_y + ROW_BAND_UM
+        ):  # stair 2
+            ring_data["stair_idx"] = 1
         else:
             continue
-        ring_data['centroid'] = np.array(centroid)
-        ring_data['Z-level'] = int(round((centroid[1]-top_x) / step))
-        
+        ring_data["centroid"] = np.array(centroid)
+        ring_data["Z-level"] = int(round((centroid[1] - top_x) / step))
+
         # crop ring in pixel coordinates with bounds checking
-        if (int(centroid[0]/pxl_size_xy)-crop_size < 0 or
-            int(centroid[0]/pxl_size_xy)+crop_size > H or
-            int(centroid[1]/pxl_size_xy)-crop_size < 0 or
-            int(centroid[1]/pxl_size_xy)+crop_size > W):
-            logger.warning("[get_rings_data] Ring at edge, skipping contrast calculation.")
+        if (
+            int(centroid[0] / pxl_size_xy) - crop_size < 0
+            or int(centroid[0] / pxl_size_xy) + crop_size > H
+            or int(centroid[1] / pxl_size_xy) - crop_size < 0
+            or int(centroid[1] / pxl_size_xy) + crop_size > W
+        ):
+            logger.warning(
+                "[get_rings_data] Ring at edge, skipping contrast calculation."
+            )
             continue
 
-        ring = img[int(centroid[0]/pxl_size_xy)-crop_size:int(centroid[0]/pxl_size_xy)+crop_size,
-                   int(centroid[1]/pxl_size_xy)-crop_size:int(centroid[1]/pxl_size_xy)+crop_size]
-        
+        ring = img[
+            int(centroid[0] / pxl_size_xy) - crop_size : int(centroid[0] / pxl_size_xy)
+            + crop_size,
+            int(centroid[1] / pxl_size_xy) - crop_size : int(centroid[1] / pxl_size_xy)
+            + crop_size,
+        ]
+
         if ring.size == 0:
             continue
 
@@ -226,7 +256,7 @@ def get_rings_data(img:np.array, metadata:dict) -> tuple:
         # Contrast extraction
         polar = transform.warp_polar(ring, center=(cy, cx), radius=cy)
         radial_profile = np.mean(polar, axis=0)
-        radial_profile = ndimage.uniform_filter1d(radial_profile, size=5)   
+        radial_profile = ndimage.uniform_filter1d(radial_profile, size=5)
 
         if radial_profile.size == 0:
             continue
@@ -238,9 +268,9 @@ def get_rings_data(img:np.array, metadata:dict) -> tuple:
             continue
 
         contrast = (peak - baseline) / (peak + baseline)
-        ring_data['contrast'] = contrast
-        
-        #add the data to the result list
+        ring_data["contrast"] = contrast
+
+        # add the data to the result list
         rings_data.append(ring_data)
 
     if not rings_data:
@@ -250,30 +280,33 @@ def get_rings_data(img:np.array, metadata:dict) -> tuple:
     return rings_data, corner_points_micron
 
 
-def drift_xy_analysis(corner_list:list, debug:bool=False) -> tuple:
-    #XY Drift analysis using the 4 main pillars
+def drift_xy_analysis(corner_list: list, debug: bool = False) -> tuple:
+    # XY Drift analysis using the 4 main pillars
     drift_xy = []
     for idx in range(4):
         coords = np.array([x[idx] for x in corner_list])
         drift_xy.append(np.diff(coords, axis=0))
 
-    #average the 4 pillars relative position
+    # average the 4 pillars relative position
     drift_xy = np.mean(drift_xy, axis=0)
 
     # Magnitude of each displacement
     step_distances = np.linalg.norm(drift_xy, axis=1)
-    
+
     # Metrics
     mean_step = np.mean(step_distances)
-    net_drift = np.linalg.norm(drift_xy[-1] - drift_xy[0])   
-    
+    net_drift = np.linalg.norm(drift_xy[-1] - drift_xy[0])
+
     if debug:
         logger.info(f"Mean XY frame-to-frame drift: {mean_step:.4f} µm")
         logger.info(f"Net XY drift (start to end): {net_drift:.4f} µm")
-       
+
     return drift_xy, mean_step, net_drift
 
-def drift_z_analysis(rings_list:list, step_micron:float, debug:bool=False) -> tuple:
+
+def drift_z_analysis(
+    rings_list: list, step_micron: float, debug: bool = False
+) -> tuple:
     """
     Estimate Z drift from a list of per-frame ring data.
 
@@ -310,32 +343,34 @@ def drift_z_analysis(rings_list:list, step_micron:float, debug:bool=False) -> tu
         Drift from first to last frame (µm).
     """
     focus_z_stair0, focus_z_stair1 = [], []
-    
+
     for rings_data in rings_list:
         if not rings_data:
             continue
 
-        for stair_idx in (0,1):
-            stair_rings = [r for r in rings_data if r['stair_idx']==stair_idx]
+        for stair_idx in (0, 1):
+            stair_rings = [r for r in rings_data if r["stair_idx"] == stair_idx]
             if not stair_rings:
                 continue
-            
-            best_ring = max(stair_rings, key=lambda r: r.get('contrast', 0))
-            z_best = best_ring.get('Z-level', None)
+
+            best_ring = max(stair_rings, key=lambda r: r.get("contrast", 0))
+            z_best = best_ring.get("Z-level", None)
             if z_best is None:
                 continue
-            
+
             if stair_idx == 0:
                 focus_z_stair0.append(z_best)
             else:
                 # Argolight stair pattern flips indexing for the second row
-                focus_z_stair1.append(abs(ring_by_stair-z_best))
-    
+                focus_z_stair1.append(abs(ring_by_stair - z_best))
+
     focus_z_stair0 = np.asarray(focus_z_stair0, dtype=float)
     focus_z_stair1 = np.asarray(focus_z_stair1, dtype=float)
 
     if focus_z_stair0.size == 0 and focus_z_stair1.size == 0:
-        logger.warning("[drift_z_analysis] Not enough valid rings for one or both stairs.")
+        logger.warning(
+            "[drift_z_analysis] Not enough valid rings for one or both stairs."
+        )
         return focus_z_stair0, focus_z_stair1, np.nan, np.nan
     elif focus_z_stair0.size == 0:
         z_mean = focus_z_stair1 * step_micron
@@ -345,18 +380,26 @@ def drift_z_analysis(rings_list:list, step_micron:float, debug:bool=False) -> tu
         mean_zstep = np.abs(focus_z_stair0)
     else:
         z_mean = np.mean([focus_z_stair0, focus_z_stair1], axis=0) * step_micron
-        mean_zstep = np.mean(np.abs(np.diff(z_mean)))               # typical per-frame drift magnitude
-    
-    net_zdrift = abs(z_mean[-1] - z_mean[0])         # displacement from start to end
+        mean_zstep = np.mean(
+            np.abs(np.diff(z_mean))
+        )  # typical per-frame drift magnitude
+
+    net_zdrift = abs(z_mean[-1] - z_mean[0])  # displacement from start to end
 
     if debug:
         logger.info(f"Mean Z frame-to-frame drift: {mean_zstep:.4f} µm")
         logger.info(f"Net Z drift (start to end): {net_zdrift:.4f} µm")
-       
-    return np.array(focus_z_stair0), np.array(focus_z_stair1), mean_zstep, net_zdrift
-    
 
-def measure_stage_stability(img_array:np.ndarray, metadata:dict, visu:bool=True, debug:bool=False, dim:str='TYX') -> dict:
+    return np.array(focus_z_stair0), np.array(focus_z_stair1), mean_zstep, net_zdrift
+
+
+def measure_stage_stability(
+    img_array: np.ndarray,
+    metadata: dict,
+    visu: bool = True,
+    debug: bool = False,
+    dim: str = "TYX",
+) -> dict:
     """
     Measure stage stability (drift) in XY and Z over a time-lapse of a stair-step sample.
 
@@ -407,48 +450,64 @@ def measure_stage_stability(img_array:np.ndarray, metadata:dict, visu:bool=True,
         }
     """
 
-    if int(metadata.get('Image Size C', 0)) > 1: #security, in case of multi-C, select the first one
-        img_array = img_array[:,:1,...]
+    if (
+        int(metadata.get("Image Size C", 0)) > 1
+    ):  # security, in case of multi-C, select the first one
+        img_array = img_array[:, :1, ...]
         if debug:
-            logger.info("stack_precision: multi-C image, taking C=0 only, new shape: "+str(img_array.shape))
+            logger.info(
+                "stack_precision: multi-C image, taking C=0 only, new shape: "
+                + str(img_array.shape)
+            )
 
-    if int(metadata.get('Image Size Z', 0)) > 1: #security, in case of multi-Z, select the first one
-        img_array = img_array[:,:,:1,:,:]
+    if (
+        int(metadata.get("Image Size Z", 0)) > 1
+    ):  # security, in case of multi-Z, select the first one
+        img_array = img_array[:, :, :1, :, :]
         if debug:
-            logger.info("stack_precision: multi-Z image, taking Z=0 only, new shape: "+str(img_array.shape))
+            logger.info(
+                "stack_precision: multi-Z image, taking Z=0 only, new shape: "
+                + str(img_array.shape)
+            )
 
     img_array = dimension_slicer(img_array, metadata, dim)
 
     img_array = np.asarray(img_array)
     if img_array.ndim != 3:
-        raise ValueError(f"[measure_stage_stability] expects a 3D time stack (T, Y, X), got {img_array.shape}")
+        raise ValueError(
+            f"[measure_stage_stability] expects a 3D time stack (T, Y, X), got {img_array.shape}"
+        )
 
-    pxl_size_xy = float(metadata.get('Physical pixel size X', 1.0))
-    
+    pxl_size_xy = float(metadata.get("Physical pixel size X", 1.0))
+
     # Default step if not detected
     step_micron = 1.0
-    filepath = metadata.get("filepath", None)
+    filepath = metadata.get("filepath")
     if filepath:
         filename = os.path.basename(filepath)
         detected = detect_step_from_filename(filename)
         if detected is not None:
             step_micron = detected
-    
+
     # norm image
     img_array = norm_img(img_array)
-    
+
     # per-frame ring & corner extraction with error handling
     rings_list = []
     corner_list = []
     for t, frame in enumerate(img_array):
         try:
             rings_data, corners = get_rings_data(frame, metadata)
-        except Exception as e:
-            logger.warning(f"[measure_stage_stability] Error in get_rings_data at frame {t}: {e}")
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"[measure_stage_stability] Error in get_rings_data at frame {t}: {e}"
+            )
             rings_data, corners = None, None
 
         if rings_data is None or corners is None:
-            logger.warning(f"[measure_stage_stability] Skipping frame {t} (no valid ring/corner data).")
+            logger.warning(
+                f"[measure_stage_stability] Skipping frame {t} (no valid ring/corner data)."
+            )
             continue
 
         rings_list.append(rings_data)
@@ -458,100 +517,145 @@ def measure_stage_stability(img_array:np.ndarray, metadata:dict, visu:bool=True,
         logger.error("[measure_stage_stability] No valid frames for drift analysis.")
         return {
             "figure": None,
-            "figure name": 'stage_stability',
+            "figure name": "stage_stability",
             "status": "error",
             "measurements": [
-                {'category': 'Stage Stability', 'name': 'Mean XY Drift', 'value': None, 'unit': 'µm'},
-                {'category': 'Stage Stability', 'name': 'Net XY Drift', 'value': None, 'unit': 'µm'},
-                {'category': 'Stage Stability', 'name': 'Mean Z Drift', 'value': None, 'unit': 'µm'},
-                {'category': 'Stage Stability', 'name': 'Net Z Drift', 'value': None, 'unit': 'µm'},
+                {
+                    "category": "Stage Stability",
+                    "name": "Mean XY Drift",
+                    "value": None,
+                    "unit": "µm",
+                },
+                {
+                    "category": "Stage Stability",
+                    "name": "Net XY Drift",
+                    "value": None,
+                    "unit": "µm",
+                },
+                {
+                    "category": "Stage Stability",
+                    "name": "Mean Z Drift",
+                    "value": None,
+                    "unit": "µm",
+                },
+                {
+                    "category": "Stage Stability",
+                    "name": "Net Z Drift",
+                    "value": None,
+                    "unit": "µm",
+                },
             ],
             "extra_measurements": {},
         }
-    #XY drift
+    # XY drift
     drift_xy, mean_step, net_drift = drift_xy_analysis(corner_list)
 
-    #Z drift
-    focus_z_stair0, focus_z_stair1, mean_zstep, net_zdrift = drift_z_analysis(rings_list, step_micron)
+    # Z drift
+    focus_z_stair0, focus_z_stair1, mean_zstep, net_zdrift = drift_z_analysis(
+        rings_list, step_micron
+    )
 
-    #figure
+    # figure
     fig = None
     if visu:
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 5))
-        
-        ax1.imshow(np.sum(img_array, axis=0))
-        #display the corners position on the image
+
+        ax1.imshow(np.sum(img_array, axis=0))  # type: ignore
+        # display the corners position on the image
         for corner in corner_list:
-            ax1.scatter(corner[:,1]/pxl_size_xy, corner[:,0]/pxl_size_xy,
-                        s=25, marker='x', c='red', linewidths=.1)   
-        ax1.axis('off')
-        ax1.set_title('Sum of the timelapse image')
-        
+            ax1.scatter(
+                corner[:, 1] / pxl_size_xy,
+                corner[:, 0] / pxl_size_xy,
+                s=25,
+                marker="x",
+                c="red",
+                linewidths=0.1,
+            )
+        ax1.axis("off")
+        ax1.set_title("Sum of the timelapse image")
+
         if drift_xy.size >= 2:
             # Build segments between consecutive points
             points = np.array([drift_xy[:, 1], drift_xy[:, 0]]).T.reshape(-1, 1, 2)
             segments = np.concatenate([points[:-1], points[1:]], axis=1)
             t = np.arange(len(drift_xy))  # time index
-            lc = LineCollection(segments, cmap='viridis', norm=plt.Normalize(0, len(drift_xy)-1))
+            lc = LineCollection(
+                segments.tolist(), cmap="viridis", norm=Normalize(0, len(drift_xy) - 1)
+            )
             lc.set_array(t)
             lc.set_linewidth(2)
             ax2.add_collection(lc)
             ax2.autoscale()
-            ax2.set_xlabel('ΔY (µm)')
-            ax2.set_ylabel('ΔX (µm)')
+            ax2.set_xlabel("ΔY (µm)")
+            ax2.set_ylabel("ΔX (µm)")
             ax2.set_title(f"Average Stage Drift (XY) per Frame: {mean_step:.4f} µm")
-            plt.colorbar(lc, ax=ax2, label='Timepoint')
+            plt.colorbar(lc, ax=ax2, label="Timepoint")
         else:
-            ax2.text(0.5, 0.5, "Not enough data for XY drift", ha='center', va='center')
-            ax2.axis('off')
-        
+            ax2.text(0.5, 0.5, "Not enough data for XY drift", ha="center", va="center")
+            ax2.axis("off")
+
         # Z drift
         if focus_z_stair0.size > 0 or focus_z_stair1.size > 0:
             if focus_z_stair0.size > 0:
-                ax3.plot(focus_z_stair0 * step_micron, '--', label="Stair 0")
+                ax3.plot(focus_z_stair0 * step_micron, "--", label="Stair 0")
             if focus_z_stair1.size > 0:
-                ax3.plot(focus_z_stair1 * step_micron, '--', label="Stair 1")
+                ax3.plot(focus_z_stair1 * step_micron, "--", label="Stair 1")
 
             if focus_z_stair0.size > 0 and focus_z_stair1.size > 0:
                 n = min(focus_z_stair0.size, focus_z_stair1.size)
-                mean_curve = 0.5 * (focus_z_stair0[:n] + focus_z_stair1[:n]) * step_micron
-                ax3.plot(mean_curve, label='Mean')
+                mean_curve = (
+                    0.5 * (focus_z_stair0[:n] + focus_z_stair1[:n]) * step_micron
+                )
+                ax3.plot(mean_curve, label="Mean")
 
             ax3.set_xlabel("Frame index")
             ax3.set_ylabel("Focus level (µm)")
             ax3.set_title(f"Average Stage Drift (Z) per Frame: {mean_zstep:.4f} µm")
             ax3.legend()
         else:
-            ax3.text(0.5, 0.5, "Not enough data for Z drift", ha='center', va='center')
-            ax3.axis('off')
-    
+            ax3.text(0.5, 0.5, "Not enough data for Z drift", ha="center", va="center")
+            ax3.axis("off")
+
         plt.tight_layout()
 
-        if __name__ == '__main__':
+        if __name__ == "__main__":
             plt.show()
-    
 
-    valid = mean_step is not None and mean_zstep is not None and not np.isnan(mean_step) and not np.isnan(mean_zstep)
+    valid = (
+        mean_step is not None
+        and mean_zstep is not None
+        and not np.isnan(mean_step)
+        and not np.isnan(mean_zstep)
+    )
     return {
         "figure": fig if visu else None,
-        "figure name": 'stage_stability',
+        "figure name": "stage_stability",
         "status": "success" if valid else "error",
         "measurements": [
-            {'category': 'Stage Stability', 'name': 'Mean XY Drift', 'value': mean_step, 'unit': 'µm'},
-            {'category': 'Stage Stability', 'name': 'Net XY Drift', 'value': net_drift, 'unit': 'µm'},
-            {'category': 'Stage Stability', 'name': 'Mean Z Drift', 'value': mean_zstep, 'unit': 'µm'},
-            {'category': 'Stage Stability', 'name': 'Net Z Drift', 'value': net_zdrift, 'unit': 'µm'},
+            {
+                "category": "Stage Stability",
+                "name": "Mean XY Drift",
+                "value": mean_step,
+                "unit": "µm",
+            },
+            {
+                "category": "Stage Stability",
+                "name": "Net XY Drift",
+                "value": net_drift,
+                "unit": "µm",
+            },
+            {
+                "category": "Stage Stability",
+                "name": "Mean Z Drift",
+                "value": mean_zstep,
+                "unit": "µm",
+            },
+            {
+                "category": "Stage Stability",
+                "name": "Net Z Drift",
+                "value": net_zdrift,
+                "unit": "µm",
+            },
         ],
         "extra_measurements": {},
     }
-
-
-if __name__ == "__main__": #standalone test
-    import pprint
-    logger.setup_logger()
-    path = r"upload"
-    filename = '63x - cross 0.125 time.czi'
-    
-    img_array, metadata = reader(path+os.sep+filename)
-    result = measure_stage_stability(img_array, metadata, debug=True)
-    pprint.pprint(result)

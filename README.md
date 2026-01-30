@@ -75,7 +75,8 @@ Local installation (while private / under development):
 ```bash
 git clone https://github.com/CCI-GU-Sweden/METEOR-core.git
 cd METEOR-core
-pip install -e .
+pip install -e .[dev]
+pre-commit install
 ```
 
 ## Parameters

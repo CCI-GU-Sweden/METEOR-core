@@ -1,5 +1,6 @@
-# -*- coding: utf-8 -*-
 """
+src/METEOR_core/intensity_analysis.py
+
 Created on Wed Jun 11 17:00:27 2025
 
 @author: simon
@@ -7,35 +8,36 @@ Created on Wed Jun 11 17:00:27 2025
 Simple program to analyze the intensity of the Argolight 4x4 intensity pattern.
 1st: detecting the 4x4 grid
 2nd: extract intensity and sort them
-3rd: linar interpolation -> r square
+3rd: linear interpolation -> r square
 
 Small trick: in case of a 3D image, it will process all 2D planes, then select the highest r square as correct value
 
 """
 
-#general import
-from typing import Dict, Any, List, Tuple
-import numpy as np
-import os
+# general import
+from typing import Any
 
-#analysis import
+# analysis import
 import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 from skimage import measure
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-#local import
+# local import
 from . import logger
-from .functions import dimension_slicer, norm_img, get_label, reader, lattice_fitting
+from .functions import dimension_slicer, get_label, lattice_fitting, norm_img
 
 
-def get_r2(sorted_intensities:List[float]) -> Tuple[np.ndarray, float]:
+def get_r2(sorted_intensities: np.ndarray) -> tuple[np.ndarray | None, float | None]:
     """
     Fit a 1D linear regression to sorted intensities and compute R².
 
     Parameters
     ----------
-    sorted_intensities : list of float
+    sorted_intensities : np.ndarray
         Intensities sorted in ascending order (or any order; index is used as X).
 
     Returns
@@ -51,7 +53,9 @@ def get_r2(sorted_intensities:List[float]) -> Tuple[np.ndarray, float]:
         logger.warning("[get_r2] empty intensity list; cannot compute R².")
         return None, None
 
-    indices = np.arange(len(sorted_intensities)).reshape(-1, 1)  # Reshape for regression
+    indices = np.arange(len(sorted_intensities)).reshape(
+        -1, 1
+    )  # Reshape for regression
     y = np.asarray(sorted_intensities, dtype=float)
 
     try:
@@ -65,9 +69,12 @@ def get_r2(sorted_intensities:List[float]) -> Tuple[np.ndarray, float]:
         return None, None
 
 
-def correct_orientation(image:np.ndarray, labels:np.ndarray,
-                        expected_corner:str='top-right',
-                        verbose:bool=False) -> Tuple[np.ndarray, np.ndarray]:
+def correct_orientation(
+    image: np.ndarray,
+    labels: np.ndarray,
+    expected_corner: str = "top-right",
+    verbose: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Automatically flip/rotate image and labels so that the largest ROI is in the expected corner.
 
@@ -93,28 +100,30 @@ def correct_orientation(image:np.ndarray, labels:np.ndarray,
     props = measure.regionprops(labels, intensity_image=image)
 
     if not props:
-        logger.warning("[correct_orientation] no labeled regions found; skipping orientation correction.")
+        logger.warning(
+            "[correct_orientation] no labeled regions found; skipping orientation correction."
+        )
         return image, labels
 
     largest = max(props, key=lambda r: r.area)
     cy, cx = largest.centroid
     h, w = image.shape
 
-    vertical = 'top' if cy < h / 2 else 'bottom'
-    horizontal = 'left' if cx < w / 2 else 'right'
+    vertical = "top" if cy < h / 2 else "bottom"
+    horizontal = "left" if cx < w / 2 else "right"
     actual_corner = f"{vertical}-{horizontal}"
 
     if verbose:
         logger.debug(f"Detected: {actual_corner}, expected: {expected_corner}")
 
     transforms = {
-        ('top-left', 'top-right'): lambda img: np.fliplr(img),
-        ('top-left', 'bottom-left'): lambda img: np.flipud(img),
-        ('top-left', 'bottom-right'): lambda img: np.rot90(img, 2),
-        ('top-right', 'bottom-left'): lambda img: np.flip(img),
-        ('top-right', 'top-left'): lambda img: np.fliplr(img),
-        ('top-right', 'bottom-right'): lambda img: np.rot90(img, 3),
-        #Warning, not complete! 'bottom-left' and 'bottom-right' not used! #TODO
+        ("top-left", "top-right"): lambda img: np.fliplr(img),
+        ("top-left", "bottom-left"): lambda img: np.flipud(img),
+        ("top-left", "bottom-right"): lambda img: np.rot90(img, 2),
+        ("top-right", "bottom-left"): lambda img: np.flip(img),
+        ("top-right", "top-left"): lambda img: np.fliplr(img),
+        ("top-right", "bottom-right"): lambda img: np.rot90(img, 3),
+        # Warning, not complete! 'bottom-left' and 'bottom-right' not used! #TODO
     }
 
     key = (expected_corner, actual_corner)
@@ -125,14 +134,22 @@ def correct_orientation(image:np.ndarray, labels:np.ndarray,
         if verbose:
             logger.debug(f"Image flipped to align {actual_corner} → {expected_corner}")
     elif expected_corner != actual_corner and key not in transforms and verbose:
-        logger.debug(f"No transform defined for (expected={expected_corner}, actual={actual_corner}); leaving as-is.")
+        logger.debug(
+            f"No transform defined for (expected={expected_corner}, actual={actual_corner}); leaving as-is."
+        )
 
     return image, labels
 
 
-def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
-                  pattern_size:float=8., spacing:float=10., visu=False,
-                  debug=False) -> Tuple[float, plt.Figure]:
+def get_intensity(
+    img: np.ndarray,
+    metadata: dict,
+    grid_size: int = 4,
+    pattern_size: float = 8.0,
+    spacing: float = 10.0,
+    visu=False,
+    debug=False,
+) -> tuple[float | None, Figure | None]:
     """
     Compute the intensity linearity (R²) of the Argolight 4×4 intensity pattern
     for a single 2D image.
@@ -165,10 +182,10 @@ def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
     -------
     r2 : float or None
         R² of the linear fit of sorted intensities. None if computation fails.
-    fig : matplotlib.figure.Figure or None
+    fig : Figure or None
         Figure object if `visu=True`, else None.
     """
-    pxl_size_xy = float(metadata.get('Physical pixel size X', 1.0))
+    pxl_size_xy = float(metadata.get("Physical pixel size X", 1.0))
 
     img = norm_img(img)
     labels = get_label(img)
@@ -176,7 +193,7 @@ def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
     # Orientation correction: largest ROI should be in top-right by default
     img, labels = correct_orientation(img, labels, verbose=debug)
 
-    #grab the center
+    # grab the center
     centers = []
     for region in measure.regionprops(labels):
         y, x = region.centroid
@@ -188,18 +205,24 @@ def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
         return None, None
 
     try:
-        lattice = lattice_fitting(centers, grid_size, spacing, pxl_size_xy,
-                                  return_rawlattice=True, image_shape=img.shape)
-    except Exception as e:
+        lattice = lattice_fitting(
+            centers,
+            grid_size,
+            spacing,
+            pxl_size_xy,
+            return_rawlattice=True,
+            image_shape=img.shape,
+        )
+    except (ValueError, RuntimeError) as e:
         logger.warning(f"get_intensity: lattice_fitting failed: {e}")
         return None, None
-    
-    #grab a selection around the estimated center and measure intensity in it
-    s = round((pattern_size/pxl_size_xy)/2)
+
+    # grab a selection around the estimated center and measure intensity in it
+    s = round((pattern_size / pxl_size_xy) / 2)
     intensities = []
     rect_list = []
     H, W = img.shape
-    
+
     for coo in lattice:
         x, y = coo[0], coo[1]
         y1, y2 = int(round(y)) - s, int(round(y)) + s
@@ -215,9 +238,9 @@ def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
             intensities.append(np.nan)
         else:
             intensities.append(np.nanmean(img[y1:y2, x1:x2]))
-        #save the rectangle
-        rect = plt.Rectangle((x1, y1), x2-x1, y2-y1, fill=False, edgecolor='red')
-        rect_list.append(rect)    
+        # save the rectangle
+        rect = Rectangle((x1, y1), x2 - x1, y2 - y1, fill=False, edgecolor="red")
+        rect_list.append(rect)
 
     intensities = np.asarray(intensities, dtype=float)
     sorted_intensities = np.sort(intensities)
@@ -225,7 +248,9 @@ def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
         logger.debug(f"Length of intensities: {len(intensities)}")
 
     if np.isnan(sorted_intensities).any():
-        logger.warning("get_intensity: NaNs found in intensities; cannot compute a reliable R².")
+        logger.warning(
+            "get_intensity: NaNs found in intensities; cannot compute a reliable R²."
+        )
         r2 = None
         predicted = None
     else:
@@ -233,23 +258,25 @@ def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
         if r2 is None:
             logger.warning("get_intensity: failed to compute R².")
             predicted = None
-    
-    #visu
+
+    # visu
     fig = None
     if visu:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        #image and pattern fit
-        ax1.imshow(img, cmap='gray')
-        ax1.plot(centers[:,0], centers[:,1], 'r.', label='Detected')
-        ax1.plot(lattice[:,0], lattice[:,1], 'g.', label='Selected')
+        # image and pattern fit
+        ax1.imshow(img, cmap="gray")
+        ax1.plot(centers[:, 0], centers[:, 1], "r.", label="Detected")
+        ax1.plot(lattice[:, 0], lattice[:, 1], "g.", label="Selected")  # type: ignore
         for rect in rect_list:
             ax1.add_patch(rect)
-        ax1.axis('off')
+        ax1.axis("off")
         ax1.set_title("Detected 4x4 pattern")
         ax1.legend()
         # Plot the sorted intensities and linear fit
-        ax2.plot(sorted_intensities, label="Sorted Intensities", marker='o')
-        ax2.plot(predicted, label=f"Linear Fit (R²={r2:.4f})", linestyle='--', color='red')
+        ax2.plot(sorted_intensities, label="Sorted Intensities", marker="o")
+        ax2.plot(
+            predicted, label=f"Linear Fit (R²={r2:.4f})", linestyle="--", color="red"
+        )
         ax2.set_xlabel("Index (Sorted)")
         ax2.set_ylabel("Normalized Intensity (a.u.)")
         ax2.set_title("Linearity of Intensities")
@@ -258,15 +285,21 @@ def get_intensity(img:np.ndarray, metadata:dict, grid_size:int=4,
 
         plt.tight_layout()
 
-        if __name__ == '__main__':
+        if __name__ == "__main__":
             plt.show()
-    
-    return r2, fig    
 
-def intensity_analysis(img_array:np.ndarray, metadata:dict,
-                       grid_size:int=4, pattern_size:float=8.,
-                       spacing:float=10., dim="ZYX",
-                       debug:bool=False,) -> Dict[str, Any]:
+    return r2, fig
+
+
+def intensity_analysis(
+    img_array: np.ndarray,
+    metadata: dict,
+    grid_size: int = 4,
+    pattern_size: float = 8.0,
+    spacing: float = 10.0,
+    dim="ZYX",
+    debug: bool = False,
+) -> dict[str, Any]:
     """
     High-level intensity linearity analysis.
 
@@ -304,32 +337,54 @@ def intensity_analysis(img_array:np.ndarray, metadata:dict,
             ],
         }
     """
-    image_size_z = int(metadata.get('Image Size Z', 0))
-    if int(metadata.get('Image Size C', 0)) > 1: #security, in case of multi-C, select the first one
-        img_array = img_array[:,:1,...]
+    image_size_z = int(metadata.get("Image Size Z", 0))
+    if (
+        int(metadata.get("Image Size C", 0)) > 1
+    ):  # security, in case of multi-C, select the first one
+        img_array = img_array[:, :1, ...]
         if debug:
-            logger.debug(f"[intensity analysis]: taking first channel for analysis: shape now {img_array.shape}")
-    if int(metadata.get('Image Size T', 0)) > 1: # in case of multi time points, take the first one
-        img_array = img_array[:1,...]
+            logger.debug(
+                f"[intensity analysis]: taking first channel for analysis: shape now {img_array.shape}"
+            )
+    if (
+        int(metadata.get("Image Size T", 0)) > 1
+    ):  # in case of multi time points, take the first one
+        img_array = img_array[:1, ...]
         if debug:
-            logger.debug(f"[intensity analysis]: taking first time point for analysis: shape now {img_array.shape}")
-    img_array = dimension_slicer(img_array, metadata, dim) 
+            logger.debug(
+                f"[intensity analysis]: taking first time point for analysis: shape now {img_array.shape}"
+            )
+    img_array = dimension_slicer(img_array, metadata, dim)
 
-    #in case a single Z, can still process the data!
+    best_plane = None  # default
+    # in case a single Z, can still process the data!
     if (image_size_z < 2 and img_array.ndim == 2) or img_array.ndim == 2:
-        r2, fig = get_intensity(img_array, metadata, pattern_size=pattern_size,
-                                    spacing=spacing, grid_size=grid_size, visu=True, debug=debug)
-        
-    else: #assume multi-Z
-        results_linearity: List[float | None] = []
-        for plane in range(img_array.shape[0]): #shape ZXY!
+        r2, fig = get_intensity(
+            img_array,
+            metadata,
+            pattern_size=pattern_size,
+            spacing=spacing,
+            grid_size=grid_size,
+            visu=True,
+            debug=debug,
+        )
+
+    else:  # assume multi-Z
+        results_linearity: list[float | None] = []
+        for plane in range(img_array.shape[0]):  # shape ZXY!
             try:
-                linearity, _ = (get_intensity(img_array[plane], metadata,
-                                                grid_size=grid_size,
-                                                pattern_size=pattern_size,
-                                                spacing=spacing, visu=False))
-            except Exception as e:
-                logger.debug(f"[intensity_analysis] get_intensity failed at Z={plane}: {e}")
+                linearity, _ = get_intensity(
+                    img_array[plane],
+                    metadata,
+                    grid_size=grid_size,
+                    pattern_size=pattern_size,
+                    spacing=spacing,
+                    visu=False,
+                )
+            except (ValueError, RuntimeError) as e:
+                logger.debug(
+                    f"[intensity_analysis] get_intensity failed at Z={plane}: {e}"
+                )
                 linearity = None
 
             results_linearity.append(linearity)
@@ -337,32 +392,48 @@ def intensity_analysis(img_array:np.ndarray, metadata:dict,
         valid_indices = [i for i, r in enumerate(results_linearity) if r is not None]
 
         if not valid_indices:
-            logger.warning("Intensity linearity analysis failed for all planes (all R² None).")
+            logger.warning(
+                "Intensity linearity analysis failed for all planes (all R² None)."
+            )
             return {
                 "figure": None,
-                "figure name": 'Intensity_r2',
+                "figure name": "Intensity_r2",
                 "status": "error",
-                "measurements": [{'category': 'Intensity', 'name': 'Linearity of Intensity', 'value': None, 'unit': '',}]
-                }
+                "measurements": [
+                    {
+                        "category": "Intensity",
+                        "name": "Linearity of Intensity",
+                        "value": None,
+                        "unit": "",
+                    }
+                ],
+            }
 
-        best_plane = max(valid_indices, key=lambda i: results_linearity[i])
-        r2, fig = get_intensity(img_array[best_plane], metadata, pattern_size=pattern_size,
-                                    spacing=spacing, grid_size=grid_size, visu=True, debug=debug)
+        best_plane = max(
+            valid_indices, key=lambda i: results_linearity[i] or float("-inf")
+        )
+        r2, fig = get_intensity(
+            img_array[best_plane],
+            metadata,
+            pattern_size=pattern_size,
+            spacing=spacing,
+            grid_size=grid_size,
+            visu=True,
+            debug=debug,
+        )
 
     valid = r2 is not None and r2 > 0
     return {
         "figure": fig,
-        "figure name": 'Intensity_r2',
+        "figure name": "Intensity_r2",
         "status": "success" if valid else "error",
-        "measurements": [{'category': 'Intensity', 'name': 'Linearity of Intensity', 'value': r2, 'unit': '',}],
-        "extra_measurements":{'best_z_plane':best_plane}}
-
-if __name__ == '__main__':
-    logger.setup_logger()
-    import pprint
-    path = r"upload"
-    filename = 'Argo 20x intensity.czi'
-    filename = 'Argo 63x Oil intensity.czi'
-    img_array, metadata = reader(path+os.sep+filename)
-    result = intensity_analysis(img_array, metadata, debug=True,)
-    pprint.pprint(result)
+        "measurements": [
+            {
+                "category": "Intensity",
+                "name": "Linearity of Intensity",
+                "value": r2,
+                "unit": "",
+            }
+        ],
+        "extra_measurements": {"best_z_plane": best_plane},
+    }
