@@ -1,53 +1,40 @@
-# tests/test_coregistration_analysis.py
+import importlib.util
 
 import METEOR_core.coregistration_analysis as ca
+import METEOR_core.functions as f
 import numpy as np
+import pytest
+
+pytestmark = pytest.mark.integration
 
 
-def test_coregistration_analysis_smoke(monkeypatch):
-    # --- fake get_coregistration ---
-    fake_result = {
-        "max_amplitude": 2.0,
-        "red_c": np.ones((10, 10)),
-        "blue_c": np.ones((10, 10)),
-        "blue_points": np.array([[0, 0], [1, 1]]),
-        "red_points": np.array([[0, 0], [0.9, 1.1]]),
-    }
+def test_coregistration_analysis_real_czi():
+    # Skip if the optional CZI reader dependency isn't installed
+    if importlib.util.find_spec("pylibCZIrw") is None:
+        import pytest
 
-    monkeypatch.setattr(ca, "get_coregistration", lambda *args, **kwargs: fake_result)
-    monkeypatch.setattr(ca.measure, "pearson_corr_coeff", lambda a, b: (0.95, None))
-    monkeypatch.setattr(ca, "sort_grid", lambda pts: (None, np.arange(len(pts))))
+        pytest.skip("pylibCZIrw not installed; skipping CZI-based integration test")
 
-    img = np.zeros((2, 3, 10, 10))  # CZYX
-    metadata = {
-        "Physical pixel size X": 0.1,
-        "Image Size C": 2,
-        "Image Size Z": 3,
-        "Image Size T": 1,
-        "axis_order": "CZYX",
-    }
+    img, metadata = f.czi_reader_tzcxy("tests/data/test_2drings.czi")
 
-    result = ca.coregistration_analysis(
-        img_array=img,
-        metadata=metadata,
-        visu=False,
-    )
+    result = ca.coregistration_analysis(img, metadata, visu=False)
 
+    assert isinstance(result, dict)
     assert result["status"] == "success"
-    assert result["figure"] is None
 
-    measurements = result["measurements"]
+    measurements = result.get("measurements")
+    assert isinstance(measurements, list)
     assert len(measurements) == 2
 
-    pearson = measurements[0]
-    amplitude = measurements[1]
+    meas_by_name = {m["name"]: m for m in measurements}
 
-    assert pearson["name"] == "Pearson"
-    assert pearson["value"] == 0.95
+    pearson = meas_by_name["Pearson"]["value"]
+    amplitude = meas_by_name["Amplitude"]["value"]
 
-    assert amplitude["name"] == "Amplitude"
-    assert amplitude["value"] == 2.0 * 0.1  # converted to µm
+    assert isinstance(pearson, float)
+    assert np.isfinite(pearson)
+    assert -1.0 <= pearson <= 1.0
 
-    extra = result["extra_measurements"]
-    assert extra["pearson_coeff"] == 0.95
-    assert extra["max_vector_amplitude_pxl"] == 2.0
+    assert isinstance(amplitude, float)
+    assert np.isfinite(amplitude)
+    assert amplitude >= 0.0

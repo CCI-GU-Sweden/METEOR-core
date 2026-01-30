@@ -37,13 +37,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+io = ["pylibCZIrw"]
 testing = [
-    "tox",
     "pytest",
     "pytest-cov",
 ]
-dev = [
-    "pre-commit",
+dev = ["pre-commit"]
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: tests that require real data and optional IO deps",
 ]
 
 [project.urls]

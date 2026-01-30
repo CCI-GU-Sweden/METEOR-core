@@ -214,8 +214,6 @@ def uniformity_analysis(
             valid_entries, key=lambda x: x[1]["uniformity"]
         )
 
-        del results_uniformity
-
     field_uniformity = best_results_uniformity["uniformity"]
     img = best_results_uniformity["img"]
     points = best_results_uniformity["points"]

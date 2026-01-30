@@ -1,5 +1,5 @@
 """
-star_resolution.py
+src/METEOR_core/star_resolution.py
 
 Branch of 15 microns
 Distance between two lines of a same branch: 0.5 microns
