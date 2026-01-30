@@ -34,8 +34,8 @@ def crop(img) -> tuple[int, int, int, int]:
 
     thr = filters.threshold_otsu(img)
     binary = img > thr
-    binary = morphology.binary_closing(binary)
-    binary = morphology.binary_opening(binary)
+    binary = morphology.closing(binary)
+    binary = morphology.opening(binary)
 
     coords = np.column_stack(np.where(binary))
     if coords.size == 0:

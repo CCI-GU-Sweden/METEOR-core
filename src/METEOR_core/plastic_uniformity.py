@@ -103,6 +103,50 @@ def calculate_field_uniformity(
     grid_size = 200
     pxl_size_xy = float(metadata.get("Physical pixel size X", 1.0))
 
+    # treat multi-scene (S>1) & single-Z as a Z-stack of scenes
+    axis_order = metadata.get("axis_order", "")
+    size_s = int(metadata.get("Image Size S", 1))
+    size_z = int(metadata.get("Image Size Z", 1))
+
+    if "S" in axis_order and size_s > 1 and size_z == 1:
+        img_stack = np.asarray(img_stack)
+
+        if axis_order != "STCZYX":
+            logger.warning(
+                f"[calculate_field_uniformity] Expected axis_order 'STCZYX' for "
+                f"multi-scene CZI, got '{axis_order}'. Proceeding but shapes may "
+                "be inconsistent."
+            )
+
+        if img_stack.shape[0] != size_s:
+            logger.warning(
+                "[calculate_field_uniformity] img_stack.shape[0] != Image Size S; "
+                "using actual array shape for S/T/C/Z."
+            )
+
+        # Assume current shape is (S, T, C, Z, Y, X)
+        S, T, C, Z, H, W = img_stack.shape
+
+        # Reorder to (T, C, S, Z, Y, X)
+        img_stack = np.transpose(img_stack, (1, 2, 0, 3, 4, 5))
+
+        # Merge S and Z into a single Z' axis: Z' = S * Z
+        new_z = S * Z
+        img_stack = img_stack.reshape(T, C, new_z, H, W)
+
+        # Update metadata to reflect TCZYX layout
+        metadata["axis_order"] = "TCZYX"
+        metadata["Image Size T"] = T
+        metadata["Image Size C"] = C
+        metadata["Image Size Z"] = new_z
+        metadata["Image Size S"] = 1
+
+        if debug:
+            logger.debug(
+                f"[calculate_field_uniformity] Folded S={S} into Z, new Z={new_z}, "
+                f"new axis_order='TCZYX', img_stack.shape={img_stack.shape}"
+            )
+
     if (
         int(metadata.get("Image Size C", 0)) > 1
     ):  # security, in case of multi-C, select the first one
