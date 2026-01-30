@@ -19,6 +19,7 @@ def test_calculate_field_uniformity_smoke(monkeypatch):
         "Image Size Z": 1,
         "Image Size C": 1,
         "Image Size T": 1,
+        "axis_order": "ZYX",
     }
 
     result = pu.calculate_field_uniformity(

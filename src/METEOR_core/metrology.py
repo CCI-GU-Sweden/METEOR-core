@@ -103,7 +103,14 @@ def metrology_splitter(img, name, metadata):
         else:
             logger.warning(f"{name} category not found. Verify name!")
             raise NameError("Category not found - check image name")
-    except (ValueError, KeyError, IndexError, AttributeError, TypeError) as e:
+    except (
+        NameError,
+        ValueError,
+        KeyError,
+        IndexError,
+        AttributeError,
+        TypeError,
+    ) as e:
         logger.warning(f"Failed to process the image: {name} - {str(e)}")
         logger.warning(f"{traceback.format_exc()}")
         return False

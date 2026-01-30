@@ -24,6 +24,7 @@ def test_coregistration_analysis_smoke(monkeypatch):
         "Image Size C": 2,
         "Image Size Z": 3,
         "Image Size T": 1,
+        "axis_order": "CZYX",
     }
 
     result = ca.coregistration_analysis(

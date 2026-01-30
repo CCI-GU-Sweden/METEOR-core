@@ -22,6 +22,7 @@ def test_distortion_analysis_smoke(monkeypatch):
         "Image Size Z": 3,
         "Image Size C": 1,
         "Image Size T": 1,
+        "axis_order": "ZYX",
     }
 
     result = da.distortion_analysis(
@@ -36,7 +37,7 @@ def test_distortion_analysis_smoke(monkeypatch):
     meas = result["measurements"][0]
     assert meas["category"] == "Distortion"
     assert meas["name"] == "Amplitude"
-    assert meas["value"] == 1.0 * 0.2  # µm conversion
+    assert round(meas["value"], 5) == 1.0 * 0.2  # µm conversion
 
     extra = result["extra_measurements"]
     assert extra["max_vector_amplitude_pxl"] == 1.0

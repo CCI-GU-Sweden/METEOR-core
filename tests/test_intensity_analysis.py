@@ -17,6 +17,7 @@ def test_intensity_analysis_smoke(monkeypatch):
         "Image Size C": 1,
         "Image Size T": 1,
         "Physical pixel size X": 0.1,
+        "axis_order": "ZYX",
     }
 
     result = ia.intensity_analysis(img, metadata)
@@ -47,6 +48,7 @@ def test_intensity_analysis_multiz_selects_best(monkeypatch):
         "Image Size C": 1,
         "Image Size T": 1,
         "Physical pixel size X": 0.1,
+        "axis_order": "ZYX",
     }
 
     result = ia.intensity_analysis(img, metadata)
