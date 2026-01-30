@@ -275,10 +275,27 @@ def czi_reader_tzcxy(filepath: str) -> tuple[np.ndarray, dict]:
         with pyczi.open_czi(filepath) as czidoc:
             pixeltypes = tr_pxl_type(czidoc.pixel_types)
 
-            # Check if this is a mosaic/tiled image
-            total_bbox = czidoc.total_bounding_box
-            s_info = total_bbox.get("S", []) if total_bbox else []
-            is_mosaic = size_s > 1 or (len(s_info) > 1 and s_info[1] > 1)
+            # --- safer mosaic detection ---
+            total_bbox = getattr(czidoc, "total_bounding_box", None)
+            s_info = []
+            if isinstance(total_bbox, dict):
+                s_info = total_bbox.get("S", []) or []
+
+            has_read_mosaic = hasattr(czidoc, "read_mosaic")
+
+            # Only consider it a mosaic if:
+            #   - we actually have read_mosaic, AND
+            #   - there are multiple scenes or S dimension suggests tiling
+            is_mosaic = has_read_mosaic and (
+                size_s > 1 or (len(s_info) >= 2 and s_info[1] > 1)
+            )
+
+            if not has_read_mosaic and size_s > 1:
+                logger.warning(
+                    "CZI appears to have multiple scenes (S>1) but this pylibCZIrw "
+                    "version has no 'read_mosaic'; falling back to per-scene 'read' "
+                    "without stitching."
+                )
 
             logger.info(
                 f"Reading CZI: S={size_s}, mosaic={is_mosaic}, bbox={total_bbox}"
@@ -301,16 +318,18 @@ def czi_reader_tzcxy(filepath: str) -> tuple[np.ndarray, dict]:
                                         scene=s,
                                         scale_factor=1,
                                     )
-                                    # Handle different return types
-                                    if isinstance(result, tuple):
-                                        img = result[0]
-                                    else:
-                                        img = result
+                                    img = (
+                                        result[0]
+                                        if isinstance(result, tuple)
+                                        else result
+                                    )
                                 else:
-                                    # Use regular read for single-tile images
+                                    # Use regular read for single-tile images or when
+                                    # read_mosaic is not available.
                                     if size_s > 1:
                                         img = czidoc.read(
-                                            plane={"T": t, "C": c, "Z": z}, scene=s
+                                            plane={"T": t, "C": c, "Z": z},
+                                            scene=s,
                                         )
                                     else:
                                         img = czidoc.read(
@@ -319,13 +338,14 @@ def czi_reader_tzcxy(filepath: str) -> tuple[np.ndarray, dict]:
 
                                 img_squeezed = np.squeeze(img)
 
-                                # Handle shape mismatch (shouldn't happen with read_mosaic, but safety)
+                                # Handle shape mismatch (safety net)
                                 if img_squeezed.shape != (size_y, size_x):
                                     h, w = img_squeezed.shape
                                     crop_h = min(h, size_y)
                                     crop_w = min(w, size_x)
                                     logger.warning(
-                                        f"Shape mismatch at S{s}T{t}C{c}Z{z}: expected ({size_y},{size_x}), got ({h},{w}). Cropping."
+                                        f"Shape mismatch at S{s}T{t}C{c}Z{z}: "
+                                        f"expected ({size_y},{size_x}), got ({h},{w}). Cropping."
                                     )
                                     img_array[s, t, c, z, :crop_h, :crop_w] = (
                                         img_squeezed[:crop_h, :crop_w]
@@ -333,7 +353,7 @@ def czi_reader_tzcxy(filepath: str) -> tuple[np.ndarray, dict]:
                                 else:
                                     img_array[s, t, c, z] = img_squeezed
 
-                            except Exception as e:
+                            except Exception as e:  # noqa: BLE001
                                 logger.error(
                                     f"Error reading plane S{s}T{t}C{c}Z{z}: {str(e)}"
                                 )
@@ -341,7 +361,7 @@ def czi_reader_tzcxy(filepath: str) -> tuple[np.ndarray, dict]:
 
     except FileNotFoundError as e:
         raise FileNotFoundError("The file does not exist.") from e
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Full error details: {type(e).__name__}: {str(e)}")
         raise ValueError(f"Error opening or reading the file: {str(e)}") from e
 
@@ -463,10 +483,9 @@ def dimension_slicer(img: np.ndarray, metadata: dict, dimension: str) -> np.ndar
 def get_label(img: np.ndarray, closing_iteration: int = 4) -> np.ndarray:
     thresh = filters.threshold_otsu(img)
     binary = img > thresh
-    binary = ndimage.binary_closing(
-        binary, iterations=closing_iteration
-    )  # security, close the cross!
-    binary = ndimage.binary_opening(binary)  # security, remove single pixels
+    for _ in range(closing_iteration):
+        binary = morphology.closing(binary)
+    binary = morphology.opening(binary)  # security, remove single pixels
     binary = morphology.remove_small_holes(binary)  # in case of holes
     labels = measure.label(binary, return_num=False)
     return np.array(labels)
@@ -757,8 +776,8 @@ def img_best_rotation(img: np.ndarray):
     img = filters.gaussian(img)
     thr = filters.threshold_otsu(img)
     binary = img > thr
-    binary = morphology.binary_closing(binary)
-    binary = morphology.binary_opening(binary)
+    binary = morphology.closing(binary)
+    binary = morphology.opening(binary)
     final_angle = 0
     i = 0
     prev_angle = float("inf")
@@ -908,8 +927,8 @@ def crop_with_border(
     """
     thr = filters.threshold_otsu(img)
     binary = img > thr
-    binary = morphology.binary_closing(binary)
-    binary = morphology.binary_opening(binary)
+    binary = morphology.closing(binary)
+    binary = morphology.opening(binary)
     # Find the coordinates of non-zero pixels
     coords = np.column_stack(np.where(binary))
     # Find extreme points
@@ -965,15 +984,11 @@ def rings_detection(img_array: np.ndarray, metadata: dict) -> np.ndarray:
     binary = ndimage.binary_fill_holes(binary)
 
     if binary.ndim == 3 and metadata.get("Image Size Z", 0) > 1:  # type: ignore #check at least 3D and Zstack!
-        binary = morphology.binary_closing(
-            binary, footprint=morphology.ball(footprint_radius)
-        )
-        # binary = morphology.binary_opening(binary, footprint=morphology.ball(footprint_radius))
+        binary = morphology.closing(binary, footprint=morphology.ball(footprint_radius))
+        # binary = morphology.opening(binary, footprint=morphology.ball(footprint_radius))
     else:
-        binary = morphology.binary_closing(
-            binary, footprint=morphology.disk(footprint_radius)
-        )
-        # binary = morphology.binary_opening(binary, footprint=morphology.disk(footprint_radius))
+        binary = morphology.closing(binary, footprint=morphology.disk(footprint_radius))
+        # binary = morphology.opening(binary, footprint=morphology.disk(footprint_radius))
 
     return binary
 
