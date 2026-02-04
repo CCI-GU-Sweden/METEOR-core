@@ -5,13 +5,7 @@ Created on Wed Jun 11 17:00:27 2025
 
 @author: simon
 
-Simple program to analyze the intensity of the Argolight 4x4 intensity pattern.
-1st: detecting the 4x4 grid
-2nd: extract intensity and sort them
-3rd: linear interpolation -> r square
-
-Small trick: in case of a 3D image, it will process all 2D planes, then select the highest r square as correct value
-
+Intensity analysis module for Argolight 4x4 pattern.
 """
 
 # general import
@@ -22,13 +16,48 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
-from skimage import measure
+from scipy import ndimage, spatial
+from skimage import feature, measure
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
 # local import
 from . import logger
-from .functions import dimension_slicer, get_label, lattice_fitting, norm_img
+from .functions import (
+    dimension_slicer,
+    get_label,
+    lattice_fitting,
+    norm_img,
+)
+
+
+def coverage_of_centers_in_rois(
+    centers_xy: np.ndarray, lattice_xy: np.ndarray, half_size_px: float
+) -> float:
+    """
+    centers_xy: (N,2) detected centers (x,y)
+    lattice_xy: (M,2) lattice nodes (x,y)
+    half_size_px: half ROI size (s) in px (same as you use)
+    Returns fraction of centers that land within the ROI of their nearest lattice node.
+    """
+    tree = spatial.KDTree(lattice_xy)
+    _, nn_idx = tree.query(centers_xy)
+
+    assigned = lattice_xy[nn_idx]  # (N,2)
+    dx = np.abs(centers_xy[:, 0] - assigned[:, 0])
+    dy = np.abs(centers_xy[:, 1] - assigned[:, 1])
+
+    inside = (dx <= half_size_px) & (dy <= half_size_px)
+    return float(np.mean(inside)) if len(centers_xy) else 0.0
+
+
+def angle_deviation_from_right_angles(angle_rad: float) -> float:
+    """Return deviation in degrees from nearest multiple of 90°."""
+    ang = (angle_rad + np.pi) % (2 * np.pi) - np.pi  # wrap to [-pi, pi]
+    # nearest multiple of pi/2
+    nearest = np.round(ang / (np.pi / 2)) * (np.pi / 2)
+    dev_rad = np.abs(ang - nearest)
+    return float(np.degrees(dev_rad))
 
 
 def get_r2(sorted_intensities: np.ndarray) -> tuple[np.ndarray | None, float | None]:
@@ -100,9 +129,10 @@ def correct_orientation(
     props = measure.regionprops(labels, intensity_image=image)
 
     if not props:
-        logger.warning(
-            "[correct_orientation] no labeled regions found; skipping orientation correction."
-        )
+        if verbose:
+            logger.warning(
+                "[correct_orientation] No labeled regions found; skipping orientation correction."
+            )
         return image, labels
 
     largest = max(props, key=lambda r: r.area)
@@ -146,10 +176,12 @@ def get_intensity(
     metadata: dict,
     grid_size: int = 4,
     pattern_size: float = 8.0,
-    spacing: float = 10.0,
+    spacing: float = 9.5,
+    threshold_method: str = "otsu",
+    closing_radius: int = 2,
     visu=False,
     debug=False,
-) -> tuple[float | None, Figure | None]:
+) -> tuple[float | None, Figure | None, dict[str, Any] | None]:
     """
     Compute the intensity linearity (R²) of the Argolight 4×4 intensity pattern
     for a single 2D image.
@@ -184,25 +216,38 @@ def get_intensity(
         R² of the linear fit of sorted intensities. None if computation fails.
     fig : Figure or None
         Figure object if `visu=True`, else None.
+    info : dict or None
+        Additional information dictionary if `visu=True`, else None.
     """
     pxl_size_xy = float(metadata.get("Physical pixel size X", 1.0))
 
     img = norm_img(img)
-    labels = get_label(img)
+    labels = get_label(
+        img, thr=threshold_method, closing_radius=closing_radius, debug=debug
+    )
+
+    if debug:
+        logger.debug(f"[intensity_analysis] Number of labels detected: {labels.max()}")
+    if np.max(labels) == 0:
+        if debug:
+            logger.warning("[intensity_analysis] No regions detected in label image.")
+        return None, None, None
 
     # Orientation correction: largest ROI should be in top-right by default
     img, labels = correct_orientation(img, labels, verbose=debug)
 
-    # grab the center
-    centers = []
-    for region in measure.regionprops(labels):
-        y, x = region.centroid
-        centers.append((x, y))
-    centers = np.array(centers)
+    # peak detection on distance transform
+    dist = ndimage.distance_transform_edt(labels > 0)
+    half_size_px = max(1, int(round((pattern_size / pxl_size_xy) / 2)))
+    min_distance = max(1, int(round(0.6 * half_size_px)))
 
-    if centers.size == 0:
-        logger.warning("get_intensity: no regions detected in label image.")
-        return None, None
+    peaks_rc = feature.peak_local_max(
+        dist,
+        min_distance=min_distance,
+        labels=labels > 0,
+        exclude_border=True,
+    )
+    centers = np.column_stack([peaks_rc[:, 1], peaks_rc[:, 0]]).astype(float)
 
     try:
         lattice = lattice_fitting(
@@ -211,11 +256,13 @@ def get_intensity(
             spacing,
             pxl_size_xy,
             return_rawlattice=True,
+            return_params=True,
             image_shape=img.shape,
         )
     except (ValueError, RuntimeError) as e:
-        logger.warning(f"get_intensity: lattice_fitting failed: {e}")
-        return None, None
+        if debug:
+            logger.warning(f"[intensity_analysis] Lattice_fitting failed: {e}")
+        return None, None, None
 
     # grab a selection around the estimated center and measure intensity in it
     s = round((pattern_size / pxl_size_xy) / 2)
@@ -223,16 +270,17 @@ def get_intensity(
     rect_list = []
     H, W = img.shape
 
-    for coo in lattice:
+    for coo in lattice[0]:
         x, y = coo[0], coo[1]
         y1, y2 = int(round(y)) - s, int(round(y)) + s
         x1, x2 = int(round(x)) - s, int(round(x)) + s
 
-        # clip to bounds
-        y1 = max(0, y1)
-        y2 = min(H, y2)
-        x1 = max(0, x1)
-        x2 = min(W, x2)
+        if (y1 < 0) or (x1 < 0) or (y2 > H) or (x2 > W):
+            if debug:
+                logger.warning(
+                    "[intensity_analysis] ROI out of bounds -> fitting likely out of FOV."
+                )
+            return None, None, None
 
         if (y2 <= y1) or (x2 <= x1):
             intensities.append(np.nan)
@@ -243,20 +291,70 @@ def get_intensity(
         rect_list.append(rect)
 
     intensities = np.asarray(intensities, dtype=float)
-    sorted_intensities = np.sort(intensities)
-    if debug:
-        logger.debug(f"Length of intensities: {len(intensities)}")
 
-    if np.isnan(sorted_intensities).any():
-        logger.warning(
-            "get_intensity: NaNs found in intensities; cannot compute a reliable R²."
+    # background value estimation (simple)
+    bg_pixels = img[labels == 0]
+    bg = np.mean(bg_pixels)
+    bg_sigma = np.median(np.abs(bg_pixels - bg))  # robust std via MAD
+
+    intensities = intensities - bg
+    intensities[intensities < bg_sigma] = 0.0  # zero-out low values
+    if intensities.size - np.count_nonzero(intensities) >= 3:
+        if debug:
+            logger.warning(
+                "[intensity_analysis] Too many low intensities after background subtraction."
+            )
+        return None, None, None
+
+    # robust dynamic range of ROI means
+    p10 = np.nanpercentile(intensities, 10)
+    p90 = np.nanpercentile(intensities, 90)
+    dyn_range = (p90 - p10) / (p90 + 1e-12)  # 0..~1
+
+    # how "non-flat" the pattern is (another simple measure)
+    cv = float(np.nanstd(intensities) / (np.nanmean(intensities) + 1e-12))
+    dev_deg = angle_deviation_from_right_angles(lattice[1][0][2])
+    coverage = coverage_of_centers_in_rois(centers, lattice[0], half_size_px=s)
+
+    # gates
+    if coverage < 0.75:
+        score = None
+    else:
+        # normalize angle penalty (0 penalty at 0°, strong after 10°)
+        ang_pen = max(0.0, (dev_deg - 5.0) / 35.0)
+        ang_pen = min(1.0, ang_pen)
+
+        # prefer lower fit cost (use log so huge costs don't dominate)
+        cost_term = -np.log10(lattice[1][1] + 1e-9)
+
+        # combine
+        score = 2.0 * dyn_range + 1.0 * cv + 0.25 * cost_term - 1.0 * ang_pen
+
+    if debug:
+        logger.debug(
+            f"[intensity_analysis] Quality metrics: dyn_range={dyn_range:.3f}, cv={cv:.3f}, "
+            f"angle_dev={dev_deg:.2f}°, coverage={coverage:.3f}, fit_cost={lattice[1][1]:.3e}, score={score}"
         )
-        r2 = None
-        predicted = None
+    if score is None or score < 0.5:
+        if debug:
+            logger.warning(
+                f"[intensity_analysis] Quality checks failed (score={score}); cannot compute reliable R²."
+            )
+        return None, None, None
+
+    sorted_intensities = np.sort(intensities)
+    r2 = None
+    predicted = None
+    if np.isnan(sorted_intensities).any():
+        if debug:
+            logger.warning(
+                "[intensity_analysis] NaNs found in intensities; cannot compute a reliable R²."
+            )
     else:
         predicted, r2 = get_r2(sorted_intensities)
         if r2 is None:
-            logger.warning("get_intensity: failed to compute R².")
+            if debug:
+                logger.warning("[intensity_analysis] Failed to compute R².")
             predicted = None
 
     # visu
@@ -264,9 +362,18 @@ def get_intensity(
     if visu:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
         # image and pattern fit
-        ax1.imshow(img, cmap="gray")
-        ax1.plot(centers[:, 0], centers[:, 1], "r.", label="Detected")
-        ax1.plot(lattice[:, 0], lattice[:, 1], "g.", label="Selected")  # type: ignore
+        from skimage import color, morphology
+
+        edge_labels = (
+            morphology.dilation(labels, morphology.disk(3)) - labels
+        )  # edge only
+        edge_labels = color.label2rgb(edge_labels)
+        ax1.imshow(edge_labels)
+        img_to_display = img * (labels > 0)
+        img_to_display[img_to_display == 0] = np.nan
+        ax1.imshow(img_to_display, cmap="gray")  # only show labeled area
+        ax1.scatter(centers[:, 0], centers[:, 1], c="r", s=10, label="Detected")
+        ax1.scatter(lattice[0][:, 0], lattice[0][:, 1], c="g", s=5, label="Selected")  # type: ignore
         for rect in rect_list:
             ax1.add_patch(rect)
         ax1.axis("off")
@@ -288,7 +395,15 @@ def get_intensity(
         if __name__ == "__main__":
             plt.show()
 
-    return r2, fig
+    info = {
+        "score": score,
+        "valid": bool,
+        "coverage": coverage,
+        "angle_dev_deg": dev_deg,
+        "thr": threshold_method,
+    }
+
+    return r2, fig, info
 
 
 def intensity_analysis(
@@ -299,6 +414,7 @@ def intensity_analysis(
     spacing: float = 10.0,
     dim="ZYX",
     debug: bool = False,
+    stop_value: float = 0.995,
 ) -> dict[str, Any]:
     """
     High-level intensity linearity analysis.
@@ -355,72 +471,90 @@ def intensity_analysis(
                 f"[intensity analysis]: taking first time point for analysis: shape now {img_array.shape}"
             )
     img_array = dimension_slicer(img_array, metadata, dim)
+    # check that the image as at least one Z plane
+    if img_array.ndim == 2 or image_size_z == 1:
+        img_array = img_array[np.newaxis, ...]  # shape ZXY
 
-    best_plane = None  # default
-    # in case a single Z, can still process the data!
-    if (image_size_z < 2 and img_array.ndim == 2) or img_array.ndim == 2:
-        r2, fig = get_intensity(
-            img_array,
-            metadata,
-            pattern_size=pattern_size,
-            spacing=spacing,
-            grid_size=grid_size,
-            visu=True,
-            debug=debug,
-        )
+    best = {"r2": None, "plane": None, "thr": None}
 
-    else:  # assume multi-Z
-        results_linearity: list[float | None] = []
-        for plane in range(img_array.shape[0]):  # shape ZXY!
-            try:
-                linearity, _ = get_intensity(
-                    img_array[plane],
-                    metadata,
-                    grid_size=grid_size,
-                    pattern_size=pattern_size,
-                    spacing=spacing,
-                    visu=False,
-                )
-            except (ValueError, RuntimeError) as e:
-                logger.debug(
-                    f"[intensity_analysis] get_intensity failed at Z={plane}: {e}"
-                )
-                linearity = None
+    THRESH_METHODS = ["li", "yen", "triangle", "otsu", "mean"]
 
-            results_linearity.append(linearity)
+    candidates = []
 
-        valid_indices = [i for i, r in enumerate(results_linearity) if r is not None]
-
-        if not valid_indices:
-            logger.warning(
-                "Intensity linearity analysis failed for all planes (all R² None)."
+    for plane in range(img_array.shape[0]):
+        for thr in THRESH_METHODS:
+            r2_tmp, _, info = get_intensity(
+                img_array[plane],
+                metadata,
+                grid_size=grid_size,
+                pattern_size=pattern_size,
+                spacing=spacing,
+                threshold_method=thr,
+                visu=False,
+                debug=debug,
             )
-            return {
-                "figure": None,
-                "figure name": "Intensity_r2",
-                "status": "error",
-                "measurements": [
-                    {
-                        "category": "Intensity",
-                        "name": "Linearity of Intensity",
-                        "value": None,
-                        "unit": "",
-                    }
-                ],
-            }
+            if info is None:
+                continue
+            info = dict(info)  # ensure mutable
+            info["plane"] = plane
+            info["thr"] = thr
+            info["r2"] = r2_tmp
+            candidates.append(info)
 
-        best_plane = max(
-            valid_indices, key=lambda i: results_linearity[i] or float("-inf")
+            # early stop if both "quality" and "r2" are excellent
+            if (
+                (r2_tmp is not None)
+                and (r2_tmp > stop_value)
+                and (info.get("score", 0) is not None)
+                and (info["score"] >= 0.9)
+            ):
+                candidates = [info]
+                logger.debug(
+                    f"Early stopping at plane {plane} with threshold {thr} due to high R² and quality score."
+                )
+                break
+        if (
+            len(candidates) == 1
+            and candidates[0]["r2"] is not None
+            and candidates[0]["r2"] > stop_value
+        ):
+            break
+
+    if not candidates:  # no result at all! Error
+        return {
+            "figure": None,
+            "figure name": "Intensity_r2",
+            "status": "error",
+            "measurements": [
+                {
+                    "category": "Intensity",
+                    "name": "Linearity of Intensity",
+                    "value": None,
+                    "unit": "",
+                }
+            ],
+        }
+
+    def key(c):
+        score = c.get("score")
+        r2 = c.get("r2")
+        return (
+            -1e9 if score is None else score,
+            -1e9 if r2 is None else r2,
         )
-        r2, fig = get_intensity(
-            img_array[best_plane],
-            metadata,
-            pattern_size=pattern_size,
-            spacing=spacing,
-            grid_size=grid_size,
-            visu=True,
-            debug=debug,
-        )
+
+    best = max(candidates, key=key)
+
+    r2, fig, _ = get_intensity(
+        img_array[best["plane"]],
+        metadata,
+        pattern_size=pattern_size,
+        spacing=spacing,
+        grid_size=grid_size,
+        threshold_method=str(best["thr"]),
+        visu=True,
+        debug=debug,
+    )
 
     valid = r2 is not None and r2 > 0
     return {
@@ -435,5 +569,9 @@ def intensity_analysis(
                 "unit": "",
             }
         ],
-        "extra_measurements": {"best_z_plane": best_plane},
+        "extra_measurements": {
+            "best_z_plane": best["plane"],
+            "used_threshold": str(best["thr"]),
+            "fitting_score": best.get("score"),
+        },
     }

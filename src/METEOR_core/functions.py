@@ -480,14 +480,35 @@ def dimension_slicer(img: np.ndarray, metadata: dict, dimension: str) -> np.ndar
     return sliced
 
 
-def get_label(img: np.ndarray, closing_iteration: int = 4) -> np.ndarray:
-    thresh = filters.threshold_otsu(img)
+def get_label(
+    img: np.ndarray, thr: str = "otsu", closing_radius: int = 4, debug: bool = False
+) -> np.ndarray:
+    if thr == "otsu":
+        thresh = filters.threshold_otsu(img)
+    elif thr == "yen":
+        thresh = filters.threshold_yen(img)
+    elif thr == "li":
+        thresh = filters.threshold_li(img)
+    elif thr == "mean":
+        thresh = filters.threshold_mean(img)
+    elif thr == "triangle":
+        thresh = filters.threshold_triangle(img)
+    else:
+        raise ValueError(f"[functions.get_label] Unknown threshold method: {thr}")
+
+    if debug:
+        logger.info(f"[functions.get_label] threshold used for binarization: {thresh}")
     binary = img > thresh
-    for _ in range(closing_iteration):
-        binary = morphology.closing(binary)
+    if img.ndim == 2:
+        selem = morphology.disk(closing_radius)
+    elif img.ndim == 3:
+        selem = morphology.ball(closing_radius)
+    else:
+        raise ValueError("[functions.get_label] img must be 2D or 3D")
+    binary = morphology.closing(binary, selem)
     binary = morphology.opening(binary)  # security, remove single pixels
     binary = morphology.remove_small_holes(binary)  # in case of holes
-    labels = measure.label(binary, return_num=False)
+    labels = measure.label(binary)
     return np.array(labels)
 
 
@@ -675,10 +696,10 @@ def lattice_fitting(
     pxl_size_xy: float,
     return_rawlattice: bool = False,
     return_points: bool = False,
-    max_rms_fraction: float = 0.5,
+    return_params: bool = False,
     image_shape=None,
     detection_percentage: float = 0.90,
-) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+):
     spacing_micron = spacing
     expected_spacing_px = spacing_micron / pxl_size_xy
     center_point = points.mean(axis=0)
@@ -708,8 +729,13 @@ def lattice_fitting(
         result.x, grid_size
     )  # Generate the lattice points
 
+    opt_params = [result.x, result.fun, result.success]
+
     if return_rawlattice:
-        return translated_lattice
+        out = translated_lattice
+        if return_params:
+            return out, opt_params
+        return out
 
     # return translated_lattice
     points_sorted, _ = sort_grid(points, gridsize=grid_size)
@@ -717,10 +743,17 @@ def lattice_fitting(
     _, idx = tree.query(points_sorted)
     paired_lattice = translated_lattice[idx]
 
+    # ---- build outputs without changing default behavior
+    out = (paired_lattice,)
+
     if return_points:
-        return paired_lattice, points_sorted
-    else:
-        return paired_lattice
+        out = (paired_lattice, points_sorted)
+
+    if return_params:
+        out = (*out, opt_params)
+
+    # If only one thing, return it as before
+    return out[0] if len(out) == 1 else out
 
 
 def norm_center_img_3D(img, edge=3):

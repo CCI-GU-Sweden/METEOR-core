@@ -1,4 +1,5 @@
 """
+src/METEOR_core/metrology.py
 Created on Tue Jun 17 15:24:51 2025
 
 @author: simon
@@ -14,10 +15,6 @@ TODO:
 illumination stability (laser)
 stage positioning
 camera read noise
-
-
-METEOR (METrology for Evaluation of Optical Resolution)
--core: a python package for microscope metrology
 
 """
 

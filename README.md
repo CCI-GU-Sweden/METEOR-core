@@ -123,7 +123,7 @@ Up to you to plug this output in your pipeline (database saving, Omero key-value
 ```python
 import METEOR_core
 
-img, metadata = METEOR_core.functions.reader("upload/40x_star.czi")
+img, metadata = METEOR_core.functions.reader("upload/star/40x_star.czi")
 
 res = METEOR_core.star_resolution.star_resolution_analysis(img, metadata)
 print(res["measurements"])
