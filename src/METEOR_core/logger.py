@@ -9,14 +9,14 @@ class CustomFormatter(logging.Formatter):
     red = "\x1b[31m"
     bold_red = "\x1b[31m"
     reset = "\x1b[0m"
-    format = "%(process)d: %(asctime)s -%(levelname)s-: %(message)s"  # type: ignore
+    log_format = "%(process)d: %(asctime)s -%(levelname)s-: %(message)s"
 
     FORMATS = {
-        logging.DEBUG: green + format + reset,  # type: ignore
-        logging.INFO: green + format + reset,  # type: ignore
-        logging.WARNING: yellow + format + reset,  # type: ignore
-        logging.ERROR: red + format + reset,  # type: ignore
-        logging.CRITICAL: bold_red + format + reset,  # type: ignore
+        logging.DEBUG: green + log_format + reset,
+        logging.INFO: green + log_format + reset,
+        logging.WARNING: yellow + log_format + reset,
+        logging.ERROR: red + log_format + reset,
+        logging.CRITICAL: bold_red + log_format + reset,
     }
 
     def format(self, record):
