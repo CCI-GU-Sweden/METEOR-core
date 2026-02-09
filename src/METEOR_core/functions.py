@@ -863,6 +863,8 @@ def get_centroid(
     nb_points: int,
     min_size: int = 20,
     tolerance: float = 0.05,
+    thr: str = "triangle",
+    verbose: bool = False,
 ):
     """
     Detect blob centroids in an image.
@@ -886,7 +888,7 @@ def get_centroid(
         Detected centroids as (x, y). Returns None only if
         the number of detected blobs is *far* from nb_points.
     """
-    labels = get_label(img)
+    labels = get_label(img, thr=thr, debug=verbose)
 
     # Measure regions and filter by area
     regions = measure.regionprops(labels)
