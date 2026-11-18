@@ -129,6 +129,28 @@ focus-quality or uncertainty measure. If analysis fails on the selected plane,
 it returns an error instead of optimizing the reported metric across planes.
 RSF currently retains its middle-plane reference.
 
+Ring distortion, co-registration and Argolight uniformity register detected
+centers in the original image frame using a square similarity lattice. Detection
+tries triangle, Otsu and Yen segmentation and selects the first threshold with
+the most one-to-one lattice matches; the selected threshold is reported. The fit
+removes translation, rotation **and uniform scale**, so distortion residuals do
+not include global magnification error. The fitted pitch, residuals and match
+counts are reported in `extra_measurements['ring_registration']`; lattice
+indices are relative and do not identify an absolute target location. The
+nominal pitch is an input assumption and the fit allows a 15% deviation; its
+matching gate and quality limits are initial, uncalibrated choices.
+
+Co-registration compares observed centers, including the global channel
+offset, using a gate of 35% of the ring pitch. Offsets close to or larger than
+half a pitch can be ambiguous or rejected. Uniformity requires detected rings
+to span the expected grid and at least 70% of its ROIs to be fully visible;
+missing and clipped ROIs are excluded rather than treated as dark. Its min/max
+result uses the observed ROIs without the previous grid median filter, so it
+is not directly comparable to earlier versions and may depend on which camera
+field was sampled. Background correction and evidence-based quality limits
+remain to be validated. Existing distortion percentage extras also require a
+separate unit and denominator review before quantitative use.
+
 Up to you to plug this output in your pipeline (database saving, Omero key-value pair...).
 
 ## Usage Example

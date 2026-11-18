@@ -20,7 +20,7 @@ from typing import Any
 # analysis import
 import matplotlib.pyplot as plt
 import numpy as np
-from skimage import filters, transform
+from skimage import filters
 from skimage.draw import line
 
 # local import
@@ -28,15 +28,10 @@ from . import logger
 from .focus import select_focus_plane
 from .functions import (
     centuring_acc,
-    crop_with_border,
     dimension_slicer,
-    get_centroid,
-    img_best_rotation,
-    lattice_fitting,
     norm_img,
-    sort_grid,
-    uniformity,
 )
+from .ring_lattice import detect_ring_lattice
 
 SELECTION_SIZE = 3  # in micron
 
@@ -44,75 +39,41 @@ SELECTION_SIZE = 3  # in micron
 def get_uniformity(img, grid_size, pxl_size_xy):
     blue = norm_img(img)
 
-    final_angle = img_best_rotation(blue)
-    blue = transform.rotate(blue, final_angle, preserve_range=True)
-    top, bottom = crop_with_border(blue, pxl_size_xy=pxl_size_xy)
-    blue_c = blue[top[0] : bottom[0], top[1] : bottom[1]]
+    blue_c = blue
     smoothed_img = filters.gaussian(blue_c, sigma=1.5, preserve_range=True)
-    blue_points = get_centroid(smoothed_img, grid_size * grid_size)
-    if blue_points is None:
-        logger.debug("[Uniformity] get_centroid returned None")
+    registration = detect_ring_lattice(smoothed_img, 5.0 / pxl_size_xy, grid_size)
+    if registration.diagnostics["index_extent"] != [grid_size, grid_size]:
+        logger.warning("Uniformity requires a grid spanning the full expected field")
         return None
 
-    lattice = lattice_fitting(
-        blue_points,
-        grid_size,
-        5.0,
-        pxl_size_xy,
-        return_rawlattice=True,
-        image_shape=blue_c.shape,
-        detection_percentage=0.98,
-    )
-
     H, W = blue_c.shape
-    s = round((SELECTION_SIZE / pxl_size_xy) / 2)
-    intensity = []
-    points = []
-
-    for coo in lattice:
+    s = max(1, round((SELECTION_SIZE / pxl_size_xy) / 2))
+    final_image = np.full((grid_size, grid_size), np.nan)
+    indices = registration.indices - registration.indices.min(axis=0)
+    clipped = 0
+    for coo, (ix, iy) in zip(registration.points_xy, indices, strict=False):
         x, y = coo[0], coo[1]
         y1, y2 = int(round(y) - s), int(round(y) + s)
         x1, x2 = int(round(x) - s), int(round(x) + s)
-        y1c = max(0, y1)
-        y2c = min(H, y2)
-        x1c = max(0, x1)
-        x2c = min(W, x2)
-
-        # Skip if the clipped region has no pixels
-        if y2c <= y1c or x2c <= x1c:
+        if y1 < 0 or x1 < 0 or y2 > H or x2 > W:
+            clipped += 1
             continue
-
-        points.append([x, y])
-        area = (y2c - y1c) * (x2c - x1c)
-        weight = area / ((2 * s) * (2 * s))  # fraction of expected area
-        val = weight * np.nanmean(smoothed_img[y1c:y2c, x1c:x2c])
-        intensity.append(val)
-
-    points, sort_indices = sort_grid(np.array(points), gridsize=grid_size)
-    intensity = np.array(intensity)[sort_indices]
-
-    if len(intensity) != grid_size * grid_size:
-        logger.debug(
-            "[Uniformity] Wrong number of intensity points or point outside the image"
-        )
+        final_image[iy, ix] = np.mean(smoothed_img[y1:y2, x1:x2])
+    count = int(np.isfinite(final_image).sum())
+    if count < 0.7 * grid_size * grid_size or np.nanmax(final_image) <= 0:
+        logger.warning("Insufficient valid ring ROIs for field uniformity")
         return None
-
-    final_image = intensity.reshape(grid_size, grid_size)
-    final_image = filters.median(final_image)
-    final_image = final_image * (100 / np.max(final_image))  # to get in percentage
-
-    if np.isnan(np.ravel(final_image)).any():
-        logger.debug("[Uniformity] NaN values in final image")
-        return None
-
-    field_uniformity = uniformity(final_image)
+    final_image *= 100 / np.nanmax(final_image)
+    field_uniformity = 100 * np.nanmin(final_image) / np.nanmax(final_image)
 
     return {
         "img": blue_c,
         "uniformity": field_uniformity,
-        "points": points,
+        "points": registration.points_xy,
         "final_image": final_image,
-        "sort_indices": sort_indices,
+        "registration": registration.diagnostics,
+        "valid_roi_count": count,
+        "clipped_roi_count": clipped,
     }
 
 
@@ -196,75 +157,67 @@ def uniformity_analysis(
     img = best_results_uniformity["img"]
     points = best_results_uniformity["points"]
     final_image = best_results_uniformity["final_image"]
-    sort_indices = best_results_uniformity["sort_indices"]
 
     # diagonal profiles
     diagonal = np.diag(final_image)
     anti_dia = np.diag(np.fliplr(final_image))
     # min_max profile
     min_coord = np.unravel_index(
-        np.argmin(final_image), final_image.shape
+        np.nanargmin(final_image), final_image.shape
     )  # (row, col)
-    max_coord = np.unravel_index(np.argmax(final_image), final_image.shape)
+    max_coord = np.unravel_index(np.nanargmax(final_image), final_image.shape)
     rr, cc = line(min_coord[0], min_coord[1], max_coord[0], max_coord[1])
     line_profile = final_image[rr, cc]
 
     # stats calculation
-    roll_off_dia = np.max(diagonal) - np.min(diagonal)
-    roll_off_adi = np.max(anti_dia) - np.min(anti_dia)
+    roll_off_dia = (
+        np.nanmax(diagonal) - np.nanmin(diagonal)
+        if np.isfinite(diagonal).any()
+        else None
+    )
+    roll_off_adi = (
+        np.nanmax(anti_dia) - np.nanmin(anti_dia)
+        if np.isfinite(anti_dia).any()
+        else None
+    )
 
     # Compute the geometric center
     geo_center = ((grid_size - 1) / 2, (grid_size - 1) / 2)
     # Compute intensity-weighted centroid
     x_coords, y_coords = np.meshgrid(np.arange(grid_size), np.arange(grid_size))
-    centroid_x = np.sum(x_coords * final_image) / np.sum(final_image)
-    centroid_y = np.sum(y_coords * final_image) / np.sum(final_image)
+    centroid_x = np.nansum(x_coords * final_image) / np.nansum(final_image)
+    centroid_y = np.nansum(y_coords * final_image) / np.nansum(final_image)
     centroid = (centroid_x, centroid_y)
 
     # compute the centering accurancy
-    centering_accuracy = centuring_acc(final_image)
+    centering_accuracy = centuring_acc(np.nan_to_num(final_image, nan=-np.inf))
 
     # visualization
     if visu:
-        X = points[:, 0][sort_indices].reshape(grid_size, grid_size)
-        Y = points[:, 1][sort_indices].reshape(grid_size, grid_size)
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
 
-        ax1.imshow(img.T, origin="lower")
+        ax1.imshow(img, cmap="gray")
+        ax1.scatter(points[:, 0], points[:, 1], s=3, c="red")
         ax1.set_title("Reference image")
         ax1.axis("off")
 
-        level = 4
-        CS = ax2.contour(
-            points[:, 1].reshape(grid_size, grid_size),
-            points[:, 0].reshape(grid_size, grid_size),
-            filters.gaussian(final_image, 0.8),
-            levels=level,
-            linewidths=range(level),
-            colors="black",
-        )
-        ax2.clabel(CS, fontsize=10)
-
         im = ax2.imshow(
             final_image,
-            extent=[X.min(), X.max(), Y.min(), Y.max()],
             cmap="jet_r",
-            alpha=0.7,
             vmin=0,
-            vmax=np.max(final_image),
-            origin="lower",
+            vmax=np.nanmax(final_image),
         )
 
         ax2.plot(
-            centroid[0] / final_image.shape[0] * img.shape[0],
-            centroid[1] / final_image.shape[1] * img.shape[1],
+            centroid[0],
+            centroid[1],
             "r+",
             markersize=10,
             zorder=100,
         )
         ax2.plot(
-            geo_center[0] / final_image.shape[0] * img.shape[0],
-            geo_center[1] / final_image.shape[1] * img.shape[1],
+            geo_center[0],
+            geo_center[1],
             "k+",
             markersize=10,
         )
@@ -278,7 +231,7 @@ def uniformity_analysis(
         ax3.plot(line_profile, "ko", linestyle="--", label="Min-Max profile")
         ax3.set_xlabel("Step (/5 microns)")
         ax3.legend()
-        ax3.set_ylim([0, np.max(final_image)])
+        ax3.set_ylim([0, np.nanmax(final_image)])
         ax3.set_title("Line intensity profiles")
 
         fig.subplots_adjust(
@@ -287,8 +240,8 @@ def uniformity_analysis(
 
         # Add statistics text at the bottom
         stats_text = (
-            f"Roll off Diagonal: {roll_off_dia:.2f}% - "
-            f"AntiDiagonal: {roll_off_adi:.2f}%\n"
+            f"Roll off Diagonal: {roll_off_dia if roll_off_dia is not None else 'n/a'} - "
+            f"AntiDiagonal: {roll_off_adi if roll_off_adi is not None else 'n/a'}\n"
             f"Centering Accuracy: {centering_accuracy:.2f}% - "
             f"Field Uniformity: {field_uniformity:.2f}%"
         )
@@ -336,5 +289,8 @@ def uniformity_analysis(
             "focus_scores": focus_scores,
             "focus_at_stack_boundary": len(focus_scores) > 1
             and best_idx in (0, len(focus_scores) - 1),
+            "ring_registration": best_results_uniformity["registration"],
+            "valid_roi_count": best_results_uniformity["valid_roi_count"],
+            "clipped_roi_count": best_results_uniformity["clipped_roi_count"],
         },
     }

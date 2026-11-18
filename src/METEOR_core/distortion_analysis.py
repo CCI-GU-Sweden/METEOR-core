@@ -16,20 +16,17 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-from skimage import filters, transform
+from skimage import filters
 
 # local import
 from . import logger
 from .focus import select_focus_plane
 from .functions import (
-    crop_with_border,
     dimension_slicer,
-    get_centroid,
-    img_best_rotation,
-    lattice_fitting,
     norm_img,
     sort_grid,
 )
+from .ring_lattice import detect_ring_lattice
 
 
 def get_distortion(
@@ -41,30 +38,13 @@ def get_distortion(
     # normalize the image first
     img = norm_img(img)
 
-    # rotate the image
-    final_angle = img_best_rotation(img)
-    img = transform.rotate(img, final_angle, preserve_range=True)
-    # crop the image
-    top_left, bottom_right = crop_with_border(img, pxl_size_xy=pxl_size_xy)
-    img = img[top_left[0] : bottom_right[0], top_left[1] : bottom_right[1]]
-
-    points = get_centroid(
-        img, grid_size * grid_size, min_size=int(spacing / pxl_size_xy * 0.6)
-    )
-    if points is None:
-        logger.warning(
-            "[Distortion analysis]: Number of point detected do not match expected grid size."
-        )
-        return None
-
-    paired_lattice, sorted_points = lattice_fitting(
-        points,
+    registration = detect_ring_lattice(
+        img,
+        spacing / pxl_size_xy,
         grid_size,
-        spacing,
-        pxl_size_xy,
-        return_points=True,
-        image_shape=img.shape,
+        min_size=max(1, int(spacing / pxl_size_xy * 0.6)),
     )
+    paired_lattice, sorted_points = registration.nodes_xy, registration.points_xy
     def_vector = paired_lattice - sorted_points
     amplitudes = np.linalg.norm(def_vector, axis=1)
 
@@ -73,6 +53,7 @@ def get_distortion(
         "points": sorted_points,
         "max_amplitude": np.max(amplitudes),
         "img": img,
+        "registration": registration.diagnostics,
     }
 
 
@@ -339,6 +320,9 @@ def distortion_analysis(
             "max_distortion_x_percent": max_distortion_x_percent,
             "max_distortion_y_percent": max_distortion_y_percent,
             "best_z_plane": best_idx,
+            "ring_registration": best_result_distortion["registration"],
+            "median_amplitude_um": float(np.median(magnitude) * pxl_size_xy),
+            "p95_amplitude_um": float(np.percentile(magnitude, 95) * pxl_size_xy),
             "focus_scores": focus_scores,
             "focus_at_stack_boundary": len(focus_scores) > 1
             and best_idx in (0, len(focus_scores) - 1),

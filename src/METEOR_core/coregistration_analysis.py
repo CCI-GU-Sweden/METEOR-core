@@ -16,20 +16,17 @@ from typing import Any
 # analysis import
 import matplotlib.pyplot as plt
 import numpy as np
-from skimage import filters, measure, morphology, transform
+from skimage import filters, measure, morphology
 
 # local import
 from . import logger
 from .focus import select_focus_plane
 from .functions import (
-    crop_with_border,
     dimension_slicer,
     get_centroid,
-    img_best_rotation,
-    lattice_fitting,
     norm_img,
-    sort_grid,
 )
+from .ring_lattice import detect_ring_lattice, match_points
 
 
 def get_coregistration(
@@ -47,54 +44,20 @@ def get_coregistration(
     # normalize the image
     blue = norm_img(blue)
     red = norm_img(red)
-    # rotate
-    final_angle = img_best_rotation(blue)
-    blue = transform.rotate(blue, final_angle, preserve_range=True)
-    red = transform.rotate(red, final_angle, preserve_range=True)
-    # crop the image
-    top, bottom = crop_with_border(blue, pxl_size_xy=pxl_size_xy)
-    blue_c = blue[top[0] : bottom[0], top[1] : bottom[1]]
-    red_c = red[top[0] : bottom[0], top[1] : bottom[1]]
-
-    # get blue points
-    blue_points = get_centroid(
-        blue_c, grid_size * grid_size, thr="triangle", verbose=debug
-    )
-    if blue_points is None:
-        raise ValueError("Failed to detect sufficient blue channel points")
-    blue_points_result = lattice_fitting(
-        blue_points,
-        grid_size,
-        spacing,
-        pxl_size_xy,
-        return_rawlattice=True,
-        image_shape=blue_c.shape,
-    )
-    blue_points = (
-        blue_points_result[1]
-        if isinstance(blue_points_result, tuple)
-        else blue_points_result
-    )
-
-    # get red points
+    blue_c, red_c = blue, red
+    registration = detect_ring_lattice(blue_c, spacing / pxl_size_xy, grid_size)
     red_points = get_centroid(
-        red_c, grid_size * grid_size, thr="triangle", verbose=debug
+        red_c, None, thr=registration.diagnostics["detection_threshold"], verbose=debug
     )
-    if red_points is None:
+    if red_points is None or len(red_points) < 9:
         raise ValueError("Failed to detect sufficient red channel points")
-    red_points_result = lattice_fitting(
-        red_points,
-        grid_size,
-        spacing,
-        pxl_size_xy,
-        return_rawlattice=True,
-        image_shape=red_c.shape,
+    pairs = match_points(
+        registration.points_xy, red_points, 0.35 * registration.spacing_px
     )
-    red_points = (
-        red_points_result[1]
-        if isinstance(red_points_result, tuple)
-        else red_points_result
-    )
+    if len(pairs) < 9:
+        raise ValueError("Insufficient matched rings across channels")
+    blue_points = registration.points_xy[pairs[:, 0]]
+    red_points = red_points[pairs[:, 1]]
 
     return {
         "max_amplitude": np.max(np.linalg.norm(blue_points - red_points, axis=1)),  # type: ignore
@@ -102,6 +65,8 @@ def get_coregistration(
         "blue_c": blue_c,
         "blue_points": blue_points,
         "red_points": red_points,
+        "registration": registration.diagnostics,
+        "channel_matches": int(len(pairs)),
     }
 
 
@@ -203,7 +168,6 @@ def coregistration_analysis(
     red_points = best_results_coregistration["red_points"]
     blue_points = best_results_coregistration["blue_points"]
     deformation_vectors = blue_points - red_points
-    _, sort_indices = sort_grid(blue_points)
 
     # Compute magnitude and direction
     magnitude = np.linalg.norm(
@@ -218,52 +182,18 @@ def coregistration_analysis(
     if visu:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5))  # type: ignore
         rgb = np.stack([red_c, blue_c, np.zeros(red_c.shape)], axis=-1)
-        X = blue_points[:, 1][sort_indices].reshape(grid_size, grid_size)
-        Y = blue_points[:, 0][sort_indices].reshape(grid_size, grid_size)
-        ax1.imshow(
-            rgb[::-1, ::-1, :],
-            origin="lower",
-            extent=[X.min(), X.max(), Y.min(), Y.max()],
-        )
-        # ax1.legend()
-        ax1.set_title("Centered image and points detection")
+        ax1.imshow(rgb)
+        ax1.scatter(blue_points[:, 0], blue_points[:, 1], s=5, c="cyan")
+        ax1.set_title("Image and matched ring centers")
         ax1.axis("off")
-
-        final_image = magnitude[sort_indices].reshape(grid_size, grid_size)
-        level = 3
-
-        Z = filters.gaussian(final_image, 0.8)
-
-        CS = ax2.contour(
-            X,
-            Y,
-            Z,
-            levels=level,
-            linewidths=range(level),
-            colors="black",
+        im = ax2.scatter(
+            blue_points[:, 0], blue_points[:, 1], c=magnitude, cmap="jet", s=12
         )
-        ax2.clabel(CS, fontsize=10)
-
-        im = ax2.imshow(
-            final_image,
-            extent=[X.min(), X.max(), Y.min(), Y.max()],
-            cmap="jet",
-            alpha=0.7,
-            vmin=0,
-            vmax=10,
-        )
-        # prepare for the vector visualization
-        dx = (X.max() - X.min()) / (grid_size - 1)  # 21 points, 20 intervals
-        dy = (Y.max() - Y.min()) / (grid_size - 1)
-        X_grid = np.linspace(X.min() + dx / 2, X.max() - dx / 2, grid_size)
-        Y_grid = np.linspace(Y.min() + dy / 2, Y.max() - dy / 2, grid_size)
-        X_centered, Y_centered = np.meshgrid(X_grid, Y_grid)
-
         ax2.quiver(
-            X_centered,
-            Y_centered,
-            deformation_vectors[:, 1][sort_indices].reshape(grid_size, grid_size),
-            deformation_vectors[:, 0][sort_indices].reshape(grid_size, grid_size),
+            blue_points[:, 0],
+            blue_points[:, 1],
+            deformation_vectors[:, 0],
+            deformation_vectors[:, 1],
             color="black",
             angles="xy",
             scale_units="xy",
@@ -273,6 +203,8 @@ def coregistration_analysis(
         )
 
         ax2.set_title("Lateral co-registration accuracy")
+        ax2.invert_yaxis()
+        ax2.set_aspect("equal")
         ax2.axis("off")
 
         plt.colorbar(im, label="Co-registration Magnitude (pixel)")
@@ -329,5 +261,9 @@ def coregistration_analysis(
             and best_idx in (0, len(focus_scores) - 1),
             "pearson_coeff": pearson_coeff,
             "max_vector_amplitude_pxl": max_vector_amplitude,
+            "ring_registration": best_results_coregistration["registration"],
+            "matched_ring_count": best_results_coregistration["channel_matches"],
+            "median_amplitude_um": float(np.median(magnitude) * pxl_size_xy),
+            "p95_amplitude_um": float(np.percentile(magnitude, 95) * pxl_size_xy),
         },
     }
