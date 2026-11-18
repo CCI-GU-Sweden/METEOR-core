@@ -26,21 +26,17 @@ def test_intensity_analysis_real_czi():
 
     measurements = result.get("measurements")
     assert isinstance(measurements, list)
-    assert len(measurements) == 1
+    assert len(measurements) == 2
 
     meas = measurements[0]
     assert meas["category"] == "Intensity"
     assert meas["name"] == "Linearity of Intensity"
 
     r2 = meas["value"]
-    # If success: r2 should be finite and in [0, 1]
-    if result["status"] == "success":
-        assert isinstance(r2, float)
-        assert np.isfinite(r2)
-        assert r2 > 0.90
-    else:
-        # If error: allow None or NaN
-        assert (r2 is None) or (isinstance(r2, float) and not np.isfinite(r2))
+    # Without an explicitly oriented expected layout, linearity is not inferred.
+    assert r2 is None
+    assert result["status"] == "success"
+    assert np.isfinite(measurements[1]["value"])
 
     assert "figure" in result
     assert "extra_measurements" in result
@@ -48,3 +44,4 @@ def test_intensity_analysis_real_czi():
     extra = result["extra_measurements"]
     assert "best_z_plane" in extra
     assert (extra["best_z_plane"] is None) or isinstance(extra["best_z_plane"], int)
+    assert len(extra["elements"]) == 16

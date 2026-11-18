@@ -70,23 +70,17 @@ def test_coregistration_uses_first_channel_focus(monkeypatch):
     assert np.array_equal(seen[0], channels[:, 1])
 
 
-def test_intensity_focus_and_threshold_do_not_maximize_r2(monkeypatch):
+def test_intensity_uses_selected_focus_plane(monkeypatch):
     stack = make_stack()
-    metadata = {"axis_order": "ZYX", "Image Size Z": 3}
+    metadata = {"axis_order": "ZYX", "Image Size Z": 3, "Physical pixel size X": 1}
     seen = []
 
-    def fake_measure(plane, metadata, threshold_method, visu, **kwargs):
-        seen.append((plane, threshold_method))
-        # The best fitting score deliberately has the lower R².
-        return (
-            (0.5 if threshold_method == "li" else 0.99),
-            None,
-            {"score": 2 if threshold_method == "li" else 1},
-        )
+    def fake_detection(plane, *args):
+        seen.append(plane)
+        raise ValueError("test detection failure")
 
-    monkeypatch.setattr(intensity, "get_intensity", fake_measure)
+    monkeypatch.setattr(intensity, "_detect_pattern", fake_detection)
     result = intensity.intensity_analysis(stack, metadata)
-    assert result["extra_measurements"]["best_z_plane"] == 1
-    assert result["extra_measurements"]["used_threshold"] == "li"
-    assert result["measurements"][0]["value"] == 0.5
-    assert all(np.array_equal(plane, stack[1]) for plane, _ in seen)
+    assert result["status"] == "error"
+    assert len(seen) == 1
+    assert np.array_equal(seen[0], stack[1])

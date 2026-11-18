@@ -151,6 +151,29 @@ field was sampled. Background correction and evidence-based quality limits
 remain to be validated. Existing distortion percentage extras also require a
 separate unit and denominator review before quantitative use.
 
+The 4×4 intensity analysis defaults to the Argo-SIM geometry: 6 µm-wide
+elements on a nominal 10 µm pitch. The [Argo-SIM v2 guide](https://argolight.com/files/Argo-SIM/Argo-SIM-v2.0_User-guide.pdf)
+describes the 6 µm elements and a 36 µm-wide four-element pattern; the 10 µm
+pitch follows from those dimensions. Check the actual slide and override
+`pattern_size` and `spacing` if needed. Signal ROIs and local background are
+measured in the original image units. The fitted grid is in the camera frame;
+its relative row/column labels do not establish the slide's physical
+orientation. Per-element signals and diagnostics are in `extra_measurements`.
+
+Without a verified, correctly oriented expected-response matrix, the legacy
+`Linearity of Intensity` measurement is `None`. The additional `Pattern signal
+range` is descriptive, not a detector-linearity measurement. A caller may pass
+`expected_levels` as a 4×4 array **in the reported camera-frame row/column
+orientation** to calculate the linear fit, residuals and R². The caller must
+verify the response values and their orientation; an assumed or incorrectly
+oriented layout is not a calibration. Set `saturation_value` to the actual
+detector ceiling. Without it, the dtype maximum is checked when available but
+the result warns that saturation is unverified. This changes the meaning and
+number of intensity measurement entries, so downstream consumers must handle a
+missing linearity value and the additional descriptive measurement. Fixed ROIs
+and background correction still need validation across acquisitions;
+low-signal elements are flagged.
+
 Up to you to plug this output in your pipeline (database saving, Omero key-value pair...).
 
 ## Usage Example
