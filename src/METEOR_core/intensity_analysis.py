@@ -178,7 +178,7 @@ def _figure(image, elements, half, fit):
             )
         )
         ax1.text(
-            x, y, f'{e["row"]},{e["column"]}', color="yellow", fontsize=7, ha="center"
+            x, y, f"{e['row']},{e['column']}", color="yellow", fontsize=7, ha="center"
         )
     ax1.set_title("Camera-frame element ROIs")
     ax1.axis("off")
@@ -195,7 +195,7 @@ def _figure(image, elements, half, fit):
             "r--",
         )
         ax2.set_xlabel("Expected response")
-        ax2.set_title(f'Spatial response fit: R²={fit["r2"]:.3f}')
+        ax2.set_title(f"Spatial response fit: R²={fit['r2']:.3f}")
     ax2.set_ylabel("Background-subtracted signal (raw units)")
     ax2.grid(True)
     fig.tight_layout()

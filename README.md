@@ -192,6 +192,7 @@ A full pipeline classification system is available via (caveat: the reader suppo
 ```python
 from METEOR_core.metrology import metrology_splitter
 from METEOR_core.functions import reader
+
 img, metadata = reader("image_name.czi")
 results = metrology_splitter(img, "image_name.czi", metadata)
 ```

@@ -124,6 +124,7 @@ Use one-to-one assignment with a distance gate, rather than independent nearest-
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
 
+
 def match_nodes(nodes_xy, detections_xy, max_distance_px):
     if len(nodes_xy) == 0 or len(detections_xy) == 0:
         return np.empty((0, 2), dtype=int)
@@ -132,7 +133,7 @@ def match_nodes(nodes_xy, detections_xy, max_distance_px):
     n = len(nodes_xy)
     dummy = np.full((n, n), max_distance_px)
     rows, cols = linear_sum_assignment(np.concatenate([cost, dummy], axis=1))
-    keep = (cols < len(detections_xy))
+    keep = cols < len(detections_xy)
     rows, cols = rows[keep], cols[keep]
     keep = cost[rows, cols] < max_distance_px
     return np.column_stack((rows[keep], cols[keep]))
