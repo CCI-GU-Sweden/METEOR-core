@@ -93,3 +93,21 @@ def test_uniformity_does_not_treat_clipped_rois_as_dark(monkeypatch):
     assert result["clipped_roi_count"] == 4
     assert result["valid_roi_count"] == 12
     assert np.isnan(result["final_image"]).sum() == 4
+
+
+def test_uniformity_excludes_central_cross(monkeypatch):
+    x, y = np.meshgrid(np.arange(5), np.arange(5))
+    points = np.column_stack((x.ravel(), y.ravel())) * 10 + 10
+    registration = register_ring_lattice(points, 10, grid_size=5)
+    monkeypatch.setattr(
+        uniformity_analysis, "detect_ring_lattice", lambda *a, **kw: registration
+    )
+    image = np.zeros((70, 70))
+    for x, y in points:
+        image[y - 2 : y + 3, x - 2 : x + 3] = 10
+    image[28:33, 28:33] = 1000
+    result = uniformity_analysis.get_uniformity(image, grid_size=5, pxl_size_xy=0.5)
+    assert result["excluded_center"]
+    assert np.isnan(result["final_image"][2, 2])
+    assert result["valid_roi_count"] == 24
+    assert result["uniformity"] > 99

@@ -51,16 +51,22 @@ def get_uniformity(img, grid_size, pxl_size_xy):
     final_image = np.full((grid_size, grid_size), np.nan)
     indices = registration.indices - registration.indices.min(axis=0)
     clipped = 0
+    excluded_center = bool(grid_size % 2)
     for coo, (ix, iy) in zip(registration.points_xy, indices, strict=False):
+        if excluded_center and ix == grid_size // 2 and iy == grid_size // 2:
+            continue
         x, y = coo[0], coo[1]
         y1, y2 = int(round(y) - s), int(round(y) + s)
         x1, x2 = int(round(x) - s), int(round(x) + s)
         if y1 < 0 or x1 < 0 or y2 > H or x2 > W:
             clipped += 1
             continue
-        final_image[iy, ix] = np.mean(smoothed_img[y1:y2, x1:x2])
+        # Use unsmoothed pixels for the measurement so the bright central
+        # cross cannot bleed into neighboring ring ROIs during filtering.
+        final_image[iy, ix] = np.mean(blue_c[y1:y2, x1:x2])
     count = int(np.isfinite(final_image).sum())
-    if count < 0.7 * grid_size * grid_size or np.nanmax(final_image) <= 0:
+    expected_rois = grid_size * grid_size - int(excluded_center)
+    if count < 0.7 * expected_rois or np.nanmax(final_image) <= 0:
         logger.warning("Insufficient valid ring ROIs for field uniformity")
         return None
     final_image *= 100 / np.nanmax(final_image)
@@ -69,11 +75,16 @@ def get_uniformity(img, grid_size, pxl_size_xy):
     return {
         "img": blue_c,
         "uniformity": field_uniformity,
-        "points": registration.points_xy,
+        "points": registration.points_xy[
+            np.any(indices != grid_size // 2, axis=1)
+            if excluded_center
+            else np.ones(len(indices), dtype=bool)
+        ],
         "final_image": final_image,
         "registration": registration.diagnostics,
         "valid_roi_count": count,
         "clipped_roi_count": clipped,
+        "excluded_center": excluded_center,
     }
 
 
@@ -292,5 +303,6 @@ def uniformity_analysis(
             "ring_registration": best_results_uniformity["registration"],
             "valid_roi_count": best_results_uniformity["valid_roi_count"],
             "clipped_roi_count": best_results_uniformity["clipped_roi_count"],
+            "excluded_center": best_results_uniformity["excluded_center"],
         },
     }

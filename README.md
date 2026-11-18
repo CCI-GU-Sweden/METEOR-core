@@ -116,7 +116,7 @@ Each main function will return a dictionnary with the following entries:
 
 If using the `metrology_splitter` function in the `metrology` module, the function will return a list of results dictionnary instead.
 
-For ring distortion, ring uniformity, co-registration and 4×4 intensity,
+For RSF, ring distortion, ring uniformity, co-registration and 4×4 intensity,
 the reference Z plane is selected independently of the reported metric. The
 selector uses the first channel and ranks planes by smoothed image-gradient
 energy using a common robust intensity scale. On successful results,
@@ -127,7 +127,9 @@ in focus. The score can be affected by noise, saturation, background structure
 and differences in signal between planes. It has not yet been calibrated as a
 focus-quality or uncertainty measure. If analysis fails on the selected plane,
 it returns an error instead of optimizing the reported metric across planes.
-RSF currently retains its middle-plane reference.
+RSF seeds its local ring searches from the matched grid and excludes the center
+cross when the complete odd-sized grid is identifiable. Excess detected
+candidate features are reported as a warning.
 
 For integer stacks of up to 16 bits, focus percentiles are computed exactly
 from a histogram without copying the full stack to floating point. For large
@@ -154,7 +156,9 @@ Co-registration compares observed centers, including the global channel
 offset, using a gate of 35% of the ring pitch. Offsets close to or larger than
 half a pitch can be ambiguous or rejected. Uniformity requires detected rings
 to span the expected grid and at least 70% of its ROIs to be fully visible;
-missing and clipped ROIs are excluded rather than treated as dark. Its min/max
+missing and clipped ROIs are excluded rather than treated as dark. For an
+odd-sized complete grid, the center cross is excluded from all uniformity
+statistics. Its min/max
 result uses the observed ROIs without the previous grid median filter, so it
 is not directly comparable to earlier versions and may depend on which camera
 field was sampled. Background correction and evidence-based quality limits
@@ -170,18 +174,20 @@ measured in the original image units. The fitted grid is in the camera frame;
 its relative row/column labels do not establish the slide's physical
 orientation. Per-element signals and diagnostics are in `extra_measurements`.
 
-Without a verified, correctly oriented expected-response matrix, the legacy
-`Linearity of Intensity` measurement is `None`. The additional `Pattern signal
-range` is descriptive, not a detector-linearity measurement. A caller may pass
-`expected_levels` as a 4×4 array **in the reported camera-frame row/column
-orientation** to calculate the linear fit, residuals and R². The caller must
-verify the response values and their orientation; an assumed or incorrectly
-oriented layout is not a calibration. Set `saturation_value` to the actual
-detector ceiling. Without it, the dtype maximum is checked when available but
-the result warns that saturation is unverified. This changes the meaning and
-number of intensity measurement entries, so downstream consumers must handle a
-missing linearity value and the additional descriptive measurement. Fixed ROIs
-and background correction still need validation across acquisitions;
+`Linearity of Intensity` is the R² of ascending measured signals against equally
+spaced ranks; the figure shows these values and the fit. Sorting makes the score
+independent of target orientation, but can conceal spatial ordering errors and
+assumes equally spaced target responses. It is a descriptive response score,
+not by itself a calibrated camera-linearity measurement. A caller may supply
+`expected_levels` as a verified 4×4 camera-frame matrix for an additional
+spatial fit in `extra_measurements['spatial_fit']`.
+
+Set `saturation_value` to the actual detector ceiling. Without it, the dtype
+maximum is checked when available but the result warns that saturation is
+unverified. By default, up to 5% saturated pixels per ROI are accepted; change
+this with `max_saturated_fraction`. The fraction is reported per element and
+any saturation produces a warning, since clipped pixels can bias the result.
+Fixed ROIs and background correction still need validation across acquisitions;
 low-signal elements are flagged.
 
 Up to you to plug this output in your pipeline (database saving, Omero key-value pair...).

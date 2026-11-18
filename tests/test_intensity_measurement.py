@@ -40,6 +40,28 @@ def test_saturation_and_clipped_background_rejected():
         _measure_elements(image, reg, 1, 6, 4, None)
 
 
+def test_moderate_saturation_is_allowed_and_reported():
+    image, centers = make_pattern()
+    reg = register_ring_lattice(centers, 12, grid_size=4)
+    image[20, 20] = 1000
+    elements, _, _ = _measure_elements(image, reg, 1, 6, 4, 1000, 0.05)
+    assert elements[0]["saturated"]
+    assert elements[0]["saturated_fraction"] == pytest.approx(1 / 49)
+    with pytest.raises(ValueError, match="saturated"):
+        _measure_elements(image, reg, 1, 6, 4, 1000, 0.01)
+
+
+def test_sorted_fit_and_graph_do_not_depend_on_orientation():
+    image, _ = make_pattern()
+    metadata = {"axis_order": "ZYX", "Physical pixel size X": 1}
+    result = intensity_analysis(np.rot90(image)[np.newaxis], metadata, spacing=12)
+    assert result["status"] == "success"
+    assert result["measurements"][0]["value"] == pytest.approx(1, abs=0.02)
+    fit = result["extra_measurements"]["fit"]
+    assert fit["sorted_signals"] == sorted(fit["sorted_signals"])
+    assert "R²=" in result["figure"].axes[1].get_title()
+
+
 def test_end_to_end_pattern_and_expected_layout():
     image, _ = make_pattern()
     metadata = {"axis_order": "ZYX", "Physical pixel size X": 1}

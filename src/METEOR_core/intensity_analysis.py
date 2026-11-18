@@ -89,7 +89,13 @@ def _detect_pattern(image, pixel_size, grid_size, pattern_size, spacing):
 
 
 def _measure_elements(
-    image, registration, pixel_size, pattern_size, grid_size, saturation_value
+    image,
+    registration,
+    pixel_size,
+    pattern_size,
+    grid_size,
+    saturation_value,
+    max_saturated_fraction=0.05,
 ):
     """Measure fixed square ROIs and surrounding local background on raw pixels."""
     half = max(1, int(round(pattern_size / pixel_size / 2)))
@@ -116,13 +122,19 @@ def _measure_elements(
             raise ValueError(f"Element ({row}, {col}) contains non-finite pixels")
         background = float(np.median(bg_pixels))
         bg_noise = float(1.4826 * np.median(np.abs(bg_pixels - background)))
-        saturated = (
-            bool(np.any(roi >= saturation_value))
+        saturated_fraction = (
+            float(np.mean(roi >= saturation_value))
             if saturation_value is not None
-            else False
+            else None
         )
-        if saturated:
-            raise ValueError(f"Element ({row}, {col}) contains saturated pixels")
+        if (
+            saturated_fraction is not None
+            and saturated_fraction > max_saturated_fraction
+        ):
+            raise ValueError(
+                f"Element ({row}, {col}) exceeds the allowed saturated pixel fraction "
+                f"({saturated_fraction:.1%} > {max_saturated_fraction:.1%})"
+            )
         raw_mean = float(np.mean(roi))
         signal = raw_mean - background
         elements.append(
@@ -136,7 +148,10 @@ def _measure_elements(
                 "background_noise_mad": bg_noise,
                 "signal": signal,
                 "low_signal": bool(signal <= 2 * bg_noise),
-                "saturated": saturated,
+                "saturated": bool(saturated_fraction)
+                if saturated_fraction is not None
+                else None,
+                "saturated_fraction": saturated_fraction,
             }
         )
     elements.sort(key=lambda item: (item["row"], item["column"]))
@@ -162,6 +177,29 @@ def _fit_expected(elements, expected_levels, grid_size):
     return {"r2": float(r2), "slope": float(slope), "intercept": float(intercept)}
 
 
+def _fit_sorted(elements):
+    """Descriptive fit of ascending responses to equally spaced ranks."""
+    ordered = sorted(elements, key=lambda item: item["signal"])
+    y = np.asarray([item["signal"] for item in ordered])
+    if np.ptp(y) <= 0:
+        raise ValueError("Element responses do not vary; R² cannot be calculated")
+    x = np.arange(1, len(y) + 1, dtype=float)
+    slope, intercept = np.polyfit(x, y, 1)
+    predicted = slope * x + intercept
+    r2 = 1 - np.sum((y - predicted) ** 2) / np.sum((y - y.mean()) ** 2)
+    for rank, element, estimate in zip(x, ordered, predicted, strict=True):
+        element["sorted_rank"] = int(rank)
+        element["sorted_fit_signal"] = float(estimate)
+    return {
+        "r2": float(r2),
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "sorted_signals": y.tolist(),
+        "predicted": predicted.tolist(),
+        "method": "sorted signal versus equally spaced rank",
+    }
+
+
 def _figure(image, elements, half, fit):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     ax1.imshow(image, cmap="gray")
@@ -182,20 +220,12 @@ def _figure(image, elements, half, fit):
         )
     ax1.set_title("Camera-frame element ROIs")
     ax1.axis("off")
-    if fit is None:
-        ax2.plot(range(len(elements)), [e["signal"] for e in elements], "o-")
-        ax2.set_xlabel("Camera-frame element index (row-major)")
-    else:
-        x = [e["expected_level"] for e in elements]
-        ax2.scatter(x, [e["signal"] for e in elements])
-        order = np.argsort(x)
-        ax2.plot(
-            np.asarray(x)[order],
-            np.asarray([e["predicted_signal"] for e in elements])[order],
-            "r--",
-        )
-        ax2.set_xlabel("Expected response")
-        ax2.set_title(f"Spatial response fit: R²={fit['r2']:.3f}")
+    x = np.arange(1, len(fit["sorted_signals"]) + 1)
+    ax2.plot(x, fit["sorted_signals"], "o-", label="Sorted responses")
+    ax2.plot(x, fit["predicted"], "r--", label="Linear fit")
+    ax2.set_xlabel("Intensity rank")
+    ax2.set_title(f"Sorted intensity response: R²={fit['r2']:.3f}")
+    ax2.legend()
     ax2.set_ylabel("Background-subtracted signal (raw units)")
     ax2.grid(True)
     fig.tight_layout()
@@ -214,13 +244,15 @@ def intensity_analysis(
     *,
     expected_levels=None,
     saturation_value: float | None = None,
+    max_saturated_fraction: float = 0.05,
     visu: bool = True,
 ) -> dict[str, Any]:
-    """Measure raw 4×4 signals; fit only when a camera-frame layout is supplied.
+    """Measure raw 4×4 signals and fit their ascending values against rank.
 
     `expected_levels` must be an explicitly oriented 4×4 matrix corresponding
     to the reported relative row/column positions. No orientation is inferred
-    from intensities. `saturation_value` should be the actual detector ceiling;
+    from intensities. An oriented matrix provides an additional spatial fit.
+    `saturation_value` should be the actual detector ceiling;
     dtype limits alone cannot establish a camera's effective bit depth.
     `stop_value` is retained for callers of the previous API and is unused.
     """
@@ -279,14 +311,26 @@ def intensity_analysis(
             raise ValueError("saturation_value must be finite and positive")
         if saturation_value is None and np.issubdtype(image.dtype, np.integer):
             saturation_value = float(np.iinfo(image.dtype).max)
+        if (
+            not np.isfinite(max_saturated_fraction)
+            or not 0 <= max_saturated_fraction <= 1
+        ):
+            raise ValueError("max_saturated_fraction must be between 0 and 1")
         elements, half, outer = _measure_elements(
-            image, registration, pixel_size, pattern_size, grid_size, saturation_value
+            image,
+            registration,
+            pixel_size,
+            pattern_size,
+            grid_size,
+            saturation_value,
+            max_saturated_fraction,
         )
-        fit = (
+        spatial_fit = (
             _fit_expected(elements, expected_levels, grid_size)
             if expected_levels is not None
             else None
         )
+        fit = _fit_sorted(elements)
         signal = np.asarray([e["signal"] for e in elements])
         signal_range = float(np.max(signal) - np.min(signal))
         warnings = [
@@ -300,15 +344,18 @@ def intensity_analysis(
             warnings.append(
                 "At least one element has low signal relative to local background variation."
             )
-        if fit is None:
+        if any(e["saturated"] for e in elements):
             warnings.append(
-                "No oriented expected response supplied; linearity was not calculated."
+                "Some ROI pixels are saturated; clipping may bias the response and R²."
             )
-        elif fit["slope"] <= 0:
+        warnings.append(
+            "Sorted-rank R² assumes equally spaced expected responses and can hide spatial ordering errors; it is not a calibrated camera-linearity measurement."
+        )
+        if spatial_fit is not None and spatial_fit["slope"] <= 0:
             warnings.append(
                 "The fitted response slope is non-positive; verify the expected layout and image orientation."
             )
-        result["measurements"][0]["value"] = fit["r2"] if fit else None
+        result["measurements"][0]["value"] = fit["r2"]
         result["measurements"].append(
             {
                 "category": "Intensity",
@@ -326,12 +373,14 @@ def intensity_analysis(
             "registration": registration.diagnostics,
             "elements": elements,
             "fit": fit,
+            "spatial_fit": spatial_fit,
             "warnings": warnings,
             "element_coordinates": "relative camera-frame row and column; physical orientation ambiguous",
             "roi_half_size_px": half,
             "background_outer_radius_px": outer,
             "saturation_value": saturation_value,
             "saturation_value_verified": explicit_ceiling,
+            "max_saturated_fraction": max_saturated_fraction,
             "pattern_size_um": pattern_size,
             "spacing_um": spacing,
         }

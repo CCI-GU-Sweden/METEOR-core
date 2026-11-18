@@ -27,12 +27,12 @@ from skimage import filters, measure, transform
 
 # local import
 from . import logger
+from .focus import select_focus_plane
 from .functions import (
-    aggregate_close_points,
     dimension_slicer,
     norm_img,
-    rings_detection,
 )
+from .ring_lattice import detect_ring_lattice
 
 RING_DIAMETER = 0.6  # microns
 MAX_ACCUMULATOR_BYTES = 128 * 1024**2
@@ -95,6 +95,9 @@ def process_ring_crop(
     img: np.ndarray,
     u_f: float,
     crop_size: int,
+    *,
+    reference_z: int | None = None,
+    max_center_offset_px: float | None = None,
 ) -> np.ndarray | None:
     """
     Process a single ring: upscale, normalize, center and recrop.
@@ -135,22 +138,45 @@ def process_ring_crop(
     del extrema_source
     if maximum == minimum:
         return None
-    mid_slice = img[indices[0][output_shape[0] // 2]][np.ix_(indices[1], indices[2])]
+    if reference_z is None:
+        z_index = output_shape[0] // 2
+    else:
+        z_matches = np.flatnonzero(indices[0] == reference_z)
+        if not len(z_matches):
+            return None
+        z_index = int(z_matches[len(z_matches) // 2])
+    mid_slice = img[indices[0][z_index]][np.ix_(indices[1], indices[2])]
     mid_slice = (mid_slice.astype(float) - minimum) / (maximum - minimum)
 
+    allowed = np.ones(mid_slice.shape, dtype=bool)
+    if max_center_offset_px is not None:
+        center_y = int(np.argmin(np.abs(indices[1] - crop_size)))
+        center_x = int(np.argmin(np.abs(indices[2] - crop_size)))
+        yy, xx = np.ogrid[: mid_slice.shape[0], : mid_slice.shape[1]]
+        allowed = (yy - center_y) ** 2 + (xx - center_x) ** 2 <= (
+            max_center_offset_px * u_f
+        ) ** 2
     try:
-        thresh = filters.threshold_otsu(mid_slice)
+        thresh = filters.threshold_otsu(mid_slice[allowed])
     except ValueError:
         return None
 
-    binary = mid_slice > thresh
+    binary = (mid_slice > thresh) & allowed
     labeled_img = measure.label(binary)
     regions = measure.regionprops(labeled_img, intensity_image=mid_slice)
     if not regions:
         return None
 
     # largest by area
-    region = max(regions, key=lambda r: r.area)
+    if max_center_offset_px is None:
+        region = max(regions, key=lambda r: r.area)
+    else:
+        region = min(
+            regions,
+            key=lambda r: (
+                (r.centroid[0] - center_y) ** 2 + (r.centroid[1] - center_x) ** 2
+            ),
+        )
 
     # robust centroid: prefer weighted_centroid if available
     cy, cx = getattr(region, "weighted_centroid", region.centroid)
@@ -210,6 +236,9 @@ def RSF_analysis(
     upsampling_factor: int = 5,
     extracrop_f: int = 8,
     dim="ZYX",
+    *,
+    grid_size: int = 21,
+    spacing: float = 5.0,
 ) -> dict[str, Any]:
     """
     Perform the ring spread function analysis on 2D rings using the Argolight 2D ring pattern.
@@ -268,47 +297,48 @@ def RSF_analysis(
     if debug:
         logger.debug(f"[RSF_analysis]: Ring expected radius is {radius_px} pixel.")
 
-    mid = img_array.shape[0] // 2
-    # middle plane as reference for ring positions (assume best focus)
-    # Detect in the original camera frame: these coordinates are also used to
-    # extract volumes from img_array and to draw the detection overlay.
-    img_array_mid = norm_img(img_array[mid])
+    try:
+        reference_z, focus_scores = select_focus_plane(img_array)
+        img_array_mid = norm_img(img_array[reference_z])
+        registration = detect_ring_lattice(
+            img_array_mid,
+            spacing / pxl_size_xy,
+            grid_size,
+            min_size=max(1, int(spacing / pxl_size_xy * 0.6)),
+        )
+    except (ValueError, IndexError, RuntimeError) as exc:
+        logger.warning(f"[RSF_analysis]: grid detection failed: {exc}")
+        result = error_return()
+        result["extra_measurements"]["error"] = str(exc)
+        return result
 
-    # detect rings
-    binary = rings_detection(img_array_mid, metadata)
-    labeled_img = measure.label(binary)
-    regions = measure.regionprops(labeled_img, intensity_image=img_array_mid)
-
-    if not regions:
-        if debug:
-            logger.debug("[RSF_analysis]: no rings detected on middle plane.")
-        return error_return()
-
-    # filter by the average size of the detected dots
-    area_r = [x.area for x in regions]
-    m = np.mean(area_r)
-    s = np.std(area_r)
-    regions = [x for x in regions if x.area > m - s and x.area < m + s]
-    if len(regions) == 0:
-        logger.debug("[RSF_analysis]: no rings remaining after area filtering.")
-        return error_return()
-
-    # ring centers on middle plane (Y, X)
-    coo = []
-    for r in regions:
-        y, x = getattr(r, "weighted_centroid", r.centroid)
-        # Morphological closing can create a region whose original intensities
-        # sum to zero, leaving its intensity-weighted centroid undefined.
-        if not np.isfinite((y, x)).all():
-            y, x = r.centroid
-        coo.append((y * pxl_size_xy, x * pxl_size_xy))
-    coo = np.array(coo)
-
-    # aggregate close points
-    coo, _ = aggregate_close_points(coo, diameter_um=RING_DIAMETER * 5, twoD=True)
-
-    # retranslate them in pixel coordinates
-    coo = np.array([[y / pxl_size_xy, x / pxl_size_xy] for y, x in coo])
+    warnings = []
+    focus_at_boundary = len(focus_scores) > 1 and reference_z in (
+        0,
+        len(focus_scores) - 1,
+    )
+    if focus_at_boundary:
+        warning = "The focus plane lies at the stack boundary; the focus peak may be outside the acquired stack."
+        logger.warning(f"[RSF_analysis]: {warning}")
+        warnings.append(warning)
+    detected_count = registration.diagnostics["detected_count"]
+    if detected_count > grid_size * grid_size:
+        warning = f"Detected {detected_count} candidate features; expected at most {grid_size * grid_size} grid positions."
+        logger.warning(f"[RSF_analysis]: {warning}")
+        warnings.append(warning)
+    indices = registration.indices
+    keep = np.ones(len(indices), dtype=bool)
+    if grid_size % 2 and registration.diagnostics["index_extent"] == [
+        grid_size,
+        grid_size,
+    ]:
+        center = indices.min(axis=0) + grid_size // 2
+        keep = np.any(indices != center, axis=1)
+    else:
+        warning = "Grid center cannot be identified reliably in this partial or even-sized grid."
+        logger.warning(f"[RSF_analysis]: {warning}")
+        warnings.append(warning)
+    coo = registration.points_xy[keep][:, ::-1]  # (y, x), original image frame
     if debug:
         logger.debug(f"[RSF_analysis]: Found {len(coo)} rings on the middle plane")
 
@@ -335,7 +365,13 @@ def RSF_analysis(
             x - crop_size : x + crop_size,
         ]
 
-        ring_up = process_ring_crop(ring_vol, upsampling_factor, crop_size)
+        ring_up = process_ring_crop(
+            ring_vol,
+            upsampling_factor,
+            crop_size,
+            reference_z=reference_z,
+            max_center_offset_px=0.3 * registration.spacing_px,
+        )
         if ring_up is None:
             return None
         return (y, x), ring_up
@@ -344,7 +380,14 @@ def RSF_analysis(
     if averaged is None:
         if debug:
             logger.debug("[RSF_analysis]: no ring volumes successfully processed.")
-        return error_return()
+        result = error_return()
+        result["extra_measurements"] = {
+            "ring_registration": registration.diagnostics,
+            "detected_candidates": detected_count,
+            "warnings": warnings,
+            "error": "No usable ring crops",
+        }
+        return result
 
     rings_coo, rings = averaged
     most_common_shape = rings.shape
@@ -360,7 +403,15 @@ def RSF_analysis(
     rings = filters.gaussian(rings)
     rings = norm_img(rings)
 
-    cz, cy, cx = rings.shape[0] // 2, rings.shape[1] // 2, rings.shape[2] // 2
+    z_mapping = np.floor(
+        np.linspace(0, img_array.shape[0] - 1, rings.shape[0]) + 0.5
+    ).astype(int)
+    z_matches = np.flatnonzero(z_mapping == reference_z)
+    cz, cy, cx = (
+        int(z_matches[len(z_matches) // 2]),
+        rings.shape[1] // 2,
+        rings.shape[2] // 2,
+    )
 
     # XY analysis
     radius = int(min(cy, cx))
@@ -462,9 +513,12 @@ def RSF_analysis(
                 y=half_level, color="blue", linestyle=":", label="Half max (XY)"
             )
         ax3.grid(True)
+        xy_text = f"{fwhm_um:.3f}" if fwhm_um is not None else "unresolved"
+        z_text = f"{fwhm_z_um:.3f}" if fwhm_z_um is not None else "unresolved"
+        contrast_text = f"{contrast:.3f}" if np.isfinite(contrast) else "unresolved"
         ax3.set_title(
-            f"Ring profile with FWHM XY: {round(fwhm_um, 3)}\n and Z: {round(fwhm_z_um, 3)} microns"  # type: ignore
-            f" and contrast {round(contrast, 3)}."
+            f"Ring profile with FWHM XY: {xy_text}\n and Z: {z_text} microns"
+            f" and contrast {contrast_text}."
         )
         ax3.set_xlabel("Distance (μm)")
         ax3.set_ylabel("Intensity (a.u.")
@@ -503,5 +557,12 @@ def RSF_analysis(
         "extra_measurements": {
             "half_level_z": half_level_z,
             "rings_n": rings_n,
+            "ring_registration": registration.diagnostics,
+            "detected_candidates": detected_count,
+            "excluded_center": bool(np.any(~keep)),
+            "best_z_plane": reference_z,
+            "focus_scores": focus_scores,
+            "focus_at_stack_boundary": focus_at_boundary,
+            "warnings": warnings,
         },
     }

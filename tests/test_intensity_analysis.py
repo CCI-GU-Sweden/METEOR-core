@@ -33,9 +33,9 @@ def test_intensity_analysis_real_czi():
     assert meas["name"] == "Linearity of Intensity"
 
     r2 = meas["value"]
-    # Without an explicitly oriented expected layout, linearity is not inferred.
-    assert r2 is None
     assert result["status"] == "success"
+    assert np.isfinite(r2)
+    assert 0 <= r2 <= 1
     assert np.isfinite(measurements[1]["value"])
 
     assert "figure" in result
