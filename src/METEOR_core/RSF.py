@@ -31,9 +31,7 @@ from skimage import filters, measure, transform
 from . import logger
 from .functions import (
     aggregate_close_points,
-    crop_with_border,
     dimension_slicer,
-    img_best_rotation,
     norm_img,
     rings_detection,
 )
@@ -207,14 +205,9 @@ def RSF_analysis(
 
     mid = img_array.shape[0] // 2
     # middle plane as reference for ring positions (assume best focus)
-    img_array_mid = img_array[mid]
-    img_array_mid = norm_img(img_array_mid)
-    final_angle = img_best_rotation(img_array_mid)
-    img_array_mid = transform.rotate(img_array_mid, final_angle, preserve_range=True)
-    top, bottom = crop_with_border(
-        img_array_mid, edge_border=0, pxl_size_xy=pxl_size_xy
-    )
-    img_array_mid = img_array_mid[top[0] : bottom[0], top[1] : bottom[1]]
+    # Detect in the original camera frame: these coordinates are also used to
+    # extract volumes from img_array and to draw the detection overlay.
+    img_array_mid = norm_img(img_array[mid])
 
     # detect rings
     binary = rings_detection(img_array_mid, metadata)
@@ -239,6 +232,10 @@ def RSF_analysis(
     coo = []
     for r in regions:
         y, x = getattr(r, "weighted_centroid", r.centroid)
+        # Morphological closing can create a region whose original intensities
+        # sum to zero, leaving its intensity-weighted centroid undefined.
+        if not np.isfinite((y, x)).all():
+            y, x = r.centroid
         coo.append((y * pxl_size_xy, x * pxl_size_xy))
     coo = np.array(coo)
 
@@ -259,9 +256,9 @@ def RSF_analysis(
 
         if (
             y - crop_size < 0
-            or y + crop_size >= img_array.shape[1]
+            or y + crop_size > img_array.shape[1]
             or x - crop_size < 0
-            or x + crop_size >= img_array.shape[2]
+            or x + crop_size > img_array.shape[2]
         ):
             return None
 
