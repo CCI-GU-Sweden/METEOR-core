@@ -51,7 +51,9 @@ def test_metrology_splitter_argo_2d_rings(monkeypatch):
     metadata = {"Image Size T": 1, "Image Size Z": 1}
 
     # Act
-    results = metrology.metrology_splitter(img, "Argo_2D_Rings_01", metadata)
+    results = metrology.metrology_splitter(
+        img, "Argo_2D_Rings_01", metadata, category_override="2d rings"
+    )
 
     # Assert
     assert isinstance(results, list)

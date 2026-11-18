@@ -196,6 +196,40 @@ img, metadata = reader("image_name.czi")
 results = metrology_splitter(img, "image_name.czi", metadata)
 ```
 
+The splitter uses image content and structured annotations, not the filename
+alone. Inspect the classification before routing when a user needs to choose:
+
+```python
+from METEOR_core.classification import classify_image
+from METEOR_core.metrology import metrology_splitter
+
+classification = classify_image(img, metadata, name="image_name.czi")
+print(classification["category"], classification["candidates"])
+print(classification["warnings"])
+
+# If the pattern is known, explicitly select it, for example a PSF bead stack:
+results = metrology_splitter(img, "image_name.czi", metadata, category_override="psf")
+```
+
+Supported explicit overrides and `pattern_type`/`analysis_type` metadata values
+include `2d rings`, `4x4 intensity`, `star`, `psf`, `plastic`, `crossing stairs`
+and the existing category names. Ring, intensity and star image detectors use
+geometric heuristics. Sparse bead detections are suggestions only; plastic and
+crossing-stairs images generally need an explicit annotation or override.
+Filename hints never authorize routing by themselves. Missing or conflicting
+evidence returns `Unknown` with `requires_review=True`; `metrology_splitter`
+then returns `False`. Its successful results include a `classification` field.
+`confidence` values such as `strong` are qualitative evidence labels, not
+calibrated probabilities. Automatic detection is intended for Argo-SIM geometry
+and must be validated for other slides. A known image category can still fail
+an analysis if its channel, Z or time axes are unsuitable.
+
+The classifier inspects the first channel and time point and selects a focus
+plane. Multiple scenes require the caller to select a scene and update axis
+metadata before automatic classification. `classify(name, metadata)` and
+`by_name(name)` remain filename-only legacy helpers; they are not used by the
+splitter's automatic routing.
+
 The different imports for analysis:
 
 ```python
