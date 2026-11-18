@@ -20,6 +20,7 @@ from skimage import filters, measure, morphology, transform
 
 # local import
 from . import logger
+from .focus import select_focus_plane
 from .functions import (
     crop_with_border,
     dimension_slicer,
@@ -162,32 +163,18 @@ def coregistration_analysis(
 
     img_array = dimension_slicer(img_array, metadata, dim)
 
-    results_coregistration = []
-    for plane in range(img_array.shape[1]):
-        try:
-            result = get_coregistration(
-                img_array[:, plane],
-                pxl_size_xy,
-                spacing=spacing,
-                grid_size=grid_size,
-                debug=debug,
-            )
-        except (ValueError, IndexError):
-            result = None
-        results_coregistration.append(result)
-    if debug:
-        logger.debug(
-            f"Plane uniformity: {str([x['max_amplitude'] if x is not None else 'INF' for x in results_coregistration])}"
+    try:
+        best_idx, focus_scores = select_focus_plane(img_array[0])
+        best_results_coregistration = get_coregistration(
+            img_array[:, best_idx],
+            pxl_size_xy,
+            spacing=spacing,
+            grid_size=grid_size,
+            debug=debug,
         )
-
-    best_results_coregistration = results_coregistration[
-        np.argmin(
-            [
-                x["max_amplitude"] if x is not None else np.inf
-                for x in results_coregistration
-            ]
-        )
-    ]
+    except (ValueError, IndexError) as exc:
+        logger.warning(f"Coregistration focus selection or analysis failed: {exc}")
+        best_results_coregistration = None
     if best_results_coregistration is None:
         logger.error("Coregistration analysis failed on all planes.")
         return {
@@ -217,7 +204,6 @@ def coregistration_analysis(
     blue_points = best_results_coregistration["blue_points"]
     deformation_vectors = blue_points - red_points
     _, sort_indices = sort_grid(blue_points)
-    del results_coregistration
 
     # Compute magnitude and direction
     magnitude = np.linalg.norm(
@@ -337,6 +323,10 @@ def coregistration_analysis(
             },
         ],
         "extra_measurements": {
+            "best_z_plane": best_idx,
+            "focus_scores": focus_scores,
+            "focus_at_stack_boundary": len(focus_scores) > 1
+            and best_idx in (0, len(focus_scores) - 1),
             "pearson_coeff": pearson_coeff,
             "max_vector_amplitude_pxl": max_vector_amplitude,
         },

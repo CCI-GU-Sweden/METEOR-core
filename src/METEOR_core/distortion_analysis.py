@@ -20,6 +20,7 @@ from skimage import filters, transform
 
 # local import
 from . import logger
+from .focus import select_focus_plane
 from .functions import (
     crop_with_border,
     dimension_slicer,
@@ -132,71 +133,28 @@ def distortion_analysis(
 
     img_array = dimension_slicer(img_array, metadata, dim)
 
-    if int(metadata.get("Image Size Z", 0)) < 2:  # single plane
+    try:
+        best_idx, focus_scores = select_focus_plane(img_array)
         best_result_distortion = get_distortion(
-            img_array, pxl_size_xy, spacing=spacing, grid_size=grid_size
+            img_array[best_idx], pxl_size_xy, spacing=spacing, grid_size=grid_size
         )
-        best_idx = 0
-        if best_result_distortion is None:
-            return {
-                "figure": None,
-                "figure name": "Distortion",
-                "status": "error",
-                "measurements": [
-                    {
-                        "category": "Distortion",
-                        "name": "Amplitude",
-                        "value": None,
-                        "unit": "µm",
-                    }
-                ],
-            }
-
-    else:
-        results_distortion = []
-        for plane in range(img_array.shape[0]):
-            try:
-                distortion = get_distortion(
-                    img_array[plane], pxl_size_xy, spacing=spacing, grid_size=grid_size
-                )
-            except (ValueError, RuntimeError):
-                distortion = None
-                filepath = metadata.get("filepath", "<unknown>")
-                logger.warning(
-                    f"Distortion analysis failed for plane {plane} of image {filepath}"
-                )
-
-            results_distortion.append(distortion)
-
-        if debug:
-            logger.debug(
-                f"Plane distortion: {str([x['max_amplitude'] if x is not None else 'INF' for x in results_distortion])}"
-            )
-
-        # pick best Z plane (smallest max_amplitude)
-        valid_entries = [
-            (i, r) for i, r in enumerate(results_distortion) if r is not None
-        ]
-
-        if not valid_entries:
-            # total failure
-            return {
-                "figure": None,
-                "figure name": "Distortion",
-                "status": "error",
-                "measurements": [
-                    {
-                        "category": "Distortion",
-                        "name": "Amplitude",
-                        "value": None,
-                        "unit": "µm",
-                    }
-                ],
-            }
-
-        best_idx, best_result_distortion = min(
-            valid_entries, key=lambda x: x[1]["max_amplitude"]
-        )
+    except (ValueError, RuntimeError, IndexError) as exc:
+        logger.warning(f"Distortion focus selection or analysis failed: {exc}")
+        best_result_distortion = None
+    if best_result_distortion is None:
+        return {
+            "figure": None,
+            "figure name": "Distortion",
+            "status": "error",
+            "measurements": [
+                {
+                    "category": "Distortion",
+                    "name": "Amplitude",
+                    "value": None,
+                    "unit": "µm",
+                }
+            ],
+        }
 
     paired_lattice = best_result_distortion["paired_lattice"]
     points = best_result_distortion["points"]
@@ -381,5 +339,8 @@ def distortion_analysis(
             "max_distortion_x_percent": max_distortion_x_percent,
             "max_distortion_y_percent": max_distortion_y_percent,
             "best_z_plane": best_idx,
+            "focus_scores": focus_scores,
+            "focus_at_stack_boundary": len(focus_scores) > 1
+            and best_idx in (0, len(focus_scores) - 1),
         },
     }

@@ -116,6 +116,19 @@ Each main function will return a dictionnary with the following entries:
 
 If using the `metrology_splitter` function in the `metrology` module, the function will return a list of results dictionnary instead.
 
+For ring distortion, ring uniformity, co-registration and 4×4 intensity,
+the reference Z plane is selected independently of the reported metric. The
+selector uses the first channel and ranks planes by smoothed image-gradient
+energy using a common robust intensity scale. On successful results,
+`extra_measurements` includes `best_z_plane`, `focus_scores` and
+`focus_at_stack_boundary`. A boundary selection means that the focus peak may
+lie outside the acquired stack; it is not a guarantee that the chosen plane is
+in focus. The score can be affected by noise, saturation, background structure
+and differences in signal between planes. It has not yet been calibrated as a
+focus-quality or uncertainty measure. If analysis fails on the selected plane,
+it returns an error instead of optimizing the reported metric across planes.
+RSF currently retains its middle-plane reference.
+
 Up to you to plug this output in your pipeline (database saving, Omero key-value pair...).
 
 ## Usage Example

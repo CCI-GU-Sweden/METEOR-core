@@ -25,6 +25,7 @@ from skimage.draw import line
 
 # local import
 from . import logger
+from .focus import select_focus_plane
 from .functions import (
     centuring_acc,
     crop_with_border,
@@ -180,39 +181,16 @@ def uniformity_analysis(
             )
     img_array = dimension_slicer(img_array, metadata, dim)
 
-    if int(metadata.get("Image Size Z", 0)) < 2:  # single plane
+    try:
+        best_idx, focus_scores = select_focus_plane(img_array)
         best_results_uniformity = get_uniformity(
-            img_array,
-            grid_size,
-            pxl_size_xy,
+            img_array[best_idx], grid_size, pxl_size_xy
         )
-        best_idx = 0
-        if best_results_uniformity is None:
-            return return_error()
-    else:
-        results_uniformity = []
-        for plane in range(img_array.shape[0]):
-            try:
-                result = get_uniformity(img_array[plane], grid_size, pxl_size_xy)
-            except (ValueError, IndexError, TypeError):
-                result = None
-            results_uniformity.append(result)
-        if debug:
-            logger.debug(
-                f"[Plane uniformity]: {str([x['uniformity'] if x is not None else 'INF' for x in results_uniformity])}"
-            )
-
-        valid_entries = [
-            (i, r) for i, r in enumerate(results_uniformity) if r is not None
-        ]
-
-        if not valid_entries:
-            # total failure
-            return return_error()
-
-        best_idx, best_results_uniformity = max(
-            valid_entries, key=lambda x: x[1]["uniformity"]
-        )
+    except (ValueError, IndexError, TypeError) as exc:
+        logger.warning(f"Uniformity focus selection or analysis failed: {exc}")
+        return return_error()
+    if best_results_uniformity is None:
+        return return_error()
 
     field_uniformity = best_results_uniformity["uniformity"]
     img = best_results_uniformity["img"]
@@ -355,5 +333,8 @@ def uniformity_analysis(
             "roll_off_dia": roll_off_dia,
             "roll_off_adi": roll_off_adi,
             "best_z_plane": best_idx,
+            "focus_scores": focus_scores,
+            "focus_at_stack_boundary": len(focus_scores) > 1
+            and best_idx in (0, len(focus_scores) - 1),
         },
     }

@@ -23,6 +23,7 @@ from sklearn.metrics import r2_score
 
 # local import
 from . import logger
+from .focus import select_focus_plane
 from .functions import (
     dimension_slicer,
     get_label,
@@ -420,8 +421,7 @@ def intensity_analysis(
     High-level intensity linearity analysis.
 
     - If the image is 2D or metadata says single Z, compute on that plane.
-    - If the image is a Z-stack, compute linearity for each Z plane independently
-      and keep the plane with the highest R².
+    - Select the Z plane using an image-focus score independent of linearity.
 
     Parameters
     ----------
@@ -435,6 +435,8 @@ def intensity_analysis(
         Physical size of each pattern element (µm).
     spacing : float
         Physical spacing between elements (µm).
+    stop_value : float
+        Retained for API compatibility; no longer used for plane selection.
 
     Returns
     -------
@@ -453,7 +455,6 @@ def intensity_analysis(
             ],
         }
     """
-    image_size_z = int(metadata.get("Image Size Z", 0))
     if (
         int(metadata.get("Image Size C", 0)) > 1
     ):  # security, in case of multi-C, select the first one
@@ -472,7 +473,7 @@ def intensity_analysis(
             )
     img_array = dimension_slicer(img_array, metadata, dim)
     # check that the image as at least one Z plane
-    if img_array.ndim == 2 or image_size_z == 1:
+    if img_array.ndim == 2:
         img_array = img_array[np.newaxis, ...]  # shape ZXY
 
     best = {"r2": None, "plane": None, "thr": None}
@@ -481,9 +482,14 @@ def intensity_analysis(
 
     candidates = []
 
-    for plane in range(img_array.shape[0]):
+    try:
+        plane, focus_scores = select_focus_plane(img_array)
+    except ValueError as exc:
+        logger.warning(f"Intensity focus selection failed: {exc}")
+        plane, focus_scores = None, []
+    if plane is not None:
         for thr in THRESH_METHODS:
-            r2_tmp, _, info = get_intensity(
+            _, _, info = get_intensity(
                 img_array[plane],
                 metadata,
                 grid_size=grid_size,
@@ -493,32 +499,11 @@ def intensity_analysis(
                 visu=False,
                 debug=debug,
             )
-            if info is None:
-                continue
-            info = dict(info)  # ensure mutable
-            info["plane"] = plane
-            info["thr"] = thr
-            info["r2"] = r2_tmp
-            candidates.append(info)
-
-            # early stop if both "quality" and "r2" are excellent
-            if (
-                (r2_tmp is not None)
-                and (r2_tmp > stop_value)
-                and (info.get("score", 0) is not None)
-                and (info["score"] >= 0.9)
-            ):
-                candidates = [info]
-                logger.debug(
-                    f"Early stopping at plane {plane} with threshold {thr} due to high R² and quality score."
-                )
-                break
-        if (
-            len(candidates) == 1
-            and candidates[0]["r2"] is not None
-            and candidates[0]["r2"] > stop_value
-        ):
-            break
+            if info is not None:
+                info = dict(info)
+                info["plane"] = plane
+                info["thr"] = thr
+                candidates.append(info)
 
     if not candidates:  # no result at all! Error
         return {
@@ -535,15 +520,9 @@ def intensity_analysis(
             ],
         }
 
-    def key(c):
-        score = c.get("score")
-        r2 = c.get("r2")
-        return (
-            -1e9 if score is None else score,
-            -1e9 if r2 is None else r2,
-        )
-
-    best = max(candidates, key=key)
+    best = max(
+        candidates, key=lambda c: c.get("score") if c.get("score") is not None else -1e9
+    )
 
     r2, fig, _ = get_intensity(
         img_array[best["plane"]],
@@ -573,5 +552,8 @@ def intensity_analysis(
             "best_z_plane": best["plane"],
             "used_threshold": str(best["thr"]),
             "fitting_score": best.get("score"),
+            "focus_scores": focus_scores,
+            "focus_at_stack_boundary": len(focus_scores) > 1
+            and best["plane"] in (0, len(focus_scores) - 1),
         },
     }
