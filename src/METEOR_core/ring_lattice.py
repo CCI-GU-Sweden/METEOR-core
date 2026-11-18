@@ -8,9 +8,10 @@ relative: a periodic pattern alone cannot identify the physical grid origin.
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.optimize import least_squares, linear_sum_assignment
+from scipy.optimize import least_squares
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.spatial import cKDTree
-from scipy.spatial.distance import cdist
 
 from .functions import get_centroid
 
@@ -52,17 +53,23 @@ def match_points(reference_xy, detected_xy, max_distance_px):
         raise ValueError("Matching distance must be positive")
     if not len(reference_xy) or not len(detected_xy):
         return np.empty((0, 2), dtype=int)
-    distances = cdist(reference_xy, detected_xy)
-    # A private dummy for every reference point permits unmatched nodes.
-    cost = np.concatenate(
-        (distances, np.full((len(reference_xy), len(reference_xy)), max_distance_px)),
-        axis=1,
+    neighbors = cKDTree(reference_xy).sparse_distance_matrix(
+        cKDTree(detected_xy), max_distance_px, output_type="coo_matrix"
     )
-    rows, cols = linear_sum_assignment(cost)
+    # Only gated edges and one private unmatched edge per reference are stored.
+    # A positive offset preserves exact zero-distance edges in the sparse graph.
+    keep = neighbors.data < max_distance_px
+    offset = np.finfo(float).eps * max(1.0, max_distance_px)
+    n = len(reference_xy)
+    row = np.concatenate((neighbors.row[keep], np.arange(n)))
+    col = np.concatenate((neighbors.col[keep], len(detected_xy) + np.arange(n)))
+    costs = np.concatenate(
+        (neighbors.data[keep] + offset, np.full(n, max_distance_px + offset))
+    )
+    graph = coo_matrix((costs, (row, col)), shape=(n, len(detected_xy) + n)).tocsr()
+    rows, cols = min_weight_full_bipartite_matching(graph)
     real = cols < len(detected_xy)
-    rows, cols = rows[real], cols[real]
-    accepted = distances[rows, cols] < max_distance_px
-    return np.column_stack((rows[accepted], cols[accepted]))
+    return np.column_stack((rows[real], cols[real]))
 
 
 def _limit_to_grid(pairs, indices, grid_size):

@@ -23,13 +23,7 @@ def test_rsf_extracts_detected_features_in_original_coordinates(
         captured.append(volume.copy())
         return None
 
-    # Execute the real delayed calls synchronously so captured crops are visible.
     monkeypatch.setattr(rsf, "process_ring_crop", capture)
-    monkeypatch.setattr(
-        rsf,
-        "Parallel",
-        lambda n_jobs: lambda tasks: [fn(*a, **kw) for fn, a, kw in tasks],
-    )
     metadata = {
         "axis_order": "ZYX",
         "Image Size Z": 3,

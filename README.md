@@ -129,6 +129,16 @@ focus-quality or uncertainty measure. If analysis fails on the selected plane,
 it returns an error instead of optimizing the reported metric across planes.
 RSF currently retains its middle-plane reference.
 
+For integer stacks of up to 16 bits, focus percentiles are computed exactly
+from a histogram without copying the full stack to floating point. For large
+floating-point stacks, they are estimated from a deterministic sample of
+approximately one million pixels; this can change the selected focus plane.
+RSF processes ring crops sequentially and accumulates their average instead of
+running one upsampled volume per CPU and retaining all volumes in memory. This
+limits parallel memory growth, with a possible runtime trade-off. The CZI reader
+still loads the full image, and figures and other analyses allocate additional
+memory, so job limits must account for the input dimensions and channels.
+
 Ring distortion, co-registration and Argolight uniformity register detected
 centers in the original image frame using a square similarity lattice. Detection
 tries triangle, Otsu and Yen segmentation and selects the first threshold with

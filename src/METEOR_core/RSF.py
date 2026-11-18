@@ -17,13 +17,11 @@ Metadata needed:
 """
 
 # general import
-from collections import Counter
 from typing import Any
 
 # analysis import
 import matplotlib.pyplot as plt
 import numpy as np
-from joblib import Parallel, delayed
 from scipy import ndimage
 from skimage import filters, measure, transform
 
@@ -37,6 +35,60 @@ from .functions import (
 )
 
 RING_DIAMETER = 0.6  # microns
+MAX_ACCUMULATOR_BYTES = 128 * 1024**2
+
+
+def _average_ring_crops(centers, process, max_accumulator_bytes=MAX_ACCUMULATOR_BYTES):
+    """Average the most common crop shape, bounding shape-accumulator memory."""
+    groups = {}
+    accumulator_bytes = 0
+    overflow = False
+    for y, x in centers:
+        result = process(y, x)
+        if result is None:
+            continue
+        coords, ring = result
+        shape = ring.shape
+        if shape not in groups:
+            size = ring.size * np.dtype(np.float64).itemsize
+            if groups and accumulator_bytes + size > max_accumulator_bytes:
+                overflow = True
+                break
+            groups[shape] = {"sum": np.zeros(shape, dtype=np.float64), "coords": []}
+            accumulator_bytes += size
+        groups[shape]["sum"] += ring
+        groups[shape]["coords"].append(coords)
+
+    if overflow:
+        # Unusually many crop shapes: use two additional passes rather than
+        # retaining an unbounded number of full-volume accumulators.
+        groups.clear()
+        shapes = {}
+        for y, x in centers:
+            result = process(y, x)
+            if result is not None:
+                coords, ring = result
+                shapes.setdefault(ring.shape, []).append((y, x, coords))
+        if not shapes:
+            return None
+        shape = max(shapes, key=lambda key: len(shapes[key]))
+        total = np.zeros(shape, dtype=np.float64)
+        coords_list = []
+        for y, x, coords in shapes[shape]:
+            result = process(y, x)
+            if result is not None and result[1].shape == shape:
+                total += result[1]
+                coords_list.append(coords)
+        if not coords_list:
+            return None
+        return np.asarray(coords_list), total / len(coords_list)
+
+    if not groups:
+        return None
+    shape = max(groups, key=lambda key: len(groups[key]["coords"]))
+    selected = groups[shape]
+    coords = np.asarray(selected["coords"])
+    return coords, selected["sum"] / len(coords)
 
 
 def process_ring_crop(
@@ -66,13 +118,25 @@ def process_ring_crop(
             f"process_ring_crop expects 3D (Z, Y, X), got shape {img.shape}"
         )
 
-    # zoom and normalize
-    ring = ndimage.zoom(img, (u_f,) * img.ndim, order=0)
-    ring = norm_img(ring)
-
-    # center on the x and y axis using middle Z slice
-    z_mid = ring.shape[0] // 2
-    mid_slice = ring[z_mid]
+    # Nearest-neighbor zoom can be represented by indices. Locate the crop on
+    # the upsampled middle plane first, without allocating the full 3D zoom.
+    if not np.isfinite(u_f) or u_f <= 0:
+        raise ValueError("Upsampling factor must be positive and finite")
+    output_shape = tuple(int(round(size * u_f)) for size in img.shape)
+    if min(output_shape) == 0:
+        return None
+    indices = [
+        np.floor(np.linspace(0, size - 1, output_size) + 0.5).astype(np.intp)
+        for size, output_size in zip(img.shape, output_shape, strict=True)
+    ]
+    # For downsampling, zoom does not necessarily include the input extrema.
+    extrema_source = img if u_f >= 1 else img[np.ix_(*indices)]
+    minimum, maximum = float(np.min(extrema_source)), float(np.max(extrema_source))
+    del extrema_source
+    if maximum == minimum:
+        return None
+    mid_slice = img[indices[0][output_shape[0] // 2]][np.ix_(indices[1], indices[2])]
+    mid_slice = (mid_slice.astype(float) - minimum) / (maximum - minimum)
 
     try:
         thresh = filters.threshold_otsu(mid_slice)
@@ -104,7 +168,8 @@ def process_ring_crop(
     if (y2 <= y1) or (x2 <= x1):
         return None
 
-    ring = ring[:, y1:y2, x1:x2]
+    ring = img[np.ix_(indices[0], indices[1][y1:y2], indices[2][x1:x2])]
+    ring = (ring.astype(float) - minimum) / (maximum - minimum)
     ring = filters.median(ring)
 
     return ring
@@ -249,7 +314,9 @@ def RSF_analysis(
 
     crop_size = int(radius_px * extracrop_f)  # radius, in pxl
 
-    # parallel processing of each ring (crop full Z stack around each XY center)
+    # Process one ring at a time to bound temporary memory even on machines with
+    # many CPUs. Accumulate by output shape to retain the previous modal-shape
+    # selection without storing every upsampled volume.
     def _process_single_ring(y: float, x: float):
         y = int(round(y))
         x = int(round(x))
@@ -273,48 +340,23 @@ def RSF_analysis(
             return None
         return (y, x), ring_up
 
-    ring_data = Parallel(n_jobs=-1)(
-        delayed(_process_single_ring)(y, x) for (y, x) in coo
-    )
-
-    # filter out failed rings
-    ring_data = [r for r in ring_data if r is not None]
-
-    if not ring_data:
+    averaged = _average_ring_crops(coo, _process_single_ring)
+    if averaged is None:
         if debug:
             logger.debug("[RSF_analysis]: no ring volumes successfully processed.")
         return error_return()
 
-    shapes = [r.shape for _, r in ring_data]
-
-    if not shapes:
-        if debug:
-            logger.debug("[RSF_analysis]: ring_data shapes list is empty.")
-        return error_return()
-
-    most_common_shape = Counter(shapes).most_common(1)[0][0]
+    rings_coo, rings = averaged
+    most_common_shape = rings.shape
     if debug:
         logger.debug(f"[RSF_analysis]: Most common shape: {most_common_shape}")
 
-    ring_data = [
-        (coords, ring) for coords, ring in ring_data if ring.shape == most_common_shape
-    ]
-
-    if not ring_data:
-        if debug:
-            logger.debug("[RSF_analysis]: no ring volumes with the most common shape.")
-        return error_return()
-
-    rings_coo = np.array([coords for coords, _ in ring_data])
-    rings = [ring for _, ring in ring_data]
-    rings_n = len(rings)
+    rings_n = len(rings_coo)
 
     if debug:
         logger.debug(f"[RSF_analysis]: Rings analyzed: {rings_n}")
 
     # average ring volume
-    rings = np.array(rings)
-    rings = np.mean(rings, axis=0)
     rings = filters.gaussian(rings)
     rings = norm_img(rings)
 
